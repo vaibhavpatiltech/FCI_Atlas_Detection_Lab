@@ -38,7 +38,7 @@ openai==2.45.0
 python-dotenv==1.2.2
 streamlit==1.51.0
 pandas==2.2.3
-numpy==1.26.4
+numpy==2.2.1
 networkx==3.4.2
 openai==1.59.7
 python-dotenv==1.0.1
