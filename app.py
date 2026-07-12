@@ -38,10 +38,29 @@ except ImportError:
 
 from transaction_networks import AnalyzerConfig, FinancialCrimeNetworkAnalyzer, SCHEMA_COLUMNS
 
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("openai_api_key")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")  # Works locally
+
+
+def _get_secret(*names: str):
+    """Look up a secret first in st.secrets (e.g. Streamlit Cloud), then
+    fall back to the environment / .env file (local development)."""
+    for name in names:
+        try:
+            value = st.secrets.get(name)
+        except Exception:
+            value = None
+        if value:
+            return value
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+OPENAI_API_KEY = _get_secret("OPENAI_API_KEY", "openai_api_key")
+GEMINI_API_KEY = _get_secret("GEMINI_API_KEY", "GOOGLE_API_KEY")
+GROQ_API_KEY = _get_secret("GROQ_API_KEY")
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 
