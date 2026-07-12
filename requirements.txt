@@ -46,3 +46,4 @@ certifi
 plotly
 ollama
 streamlit-agraph
+scipy
