@@ -4,9 +4,11 @@ import math
 import os
 import re
 import ssl
+import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
+from io import BytesIO
 from pathlib import Path
 from typing import List
 
@@ -39,28 +41,9 @@ except ImportError:
 from transaction_networks import AnalyzerConfig, FinancialCrimeNetworkAnalyzer, SCHEMA_COLUMNS
 
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
-
-
-def _get_secret(*names: str):
-    """Look up a secret first in st.secrets (e.g. Streamlit Cloud), then
-    fall back to the environment / .env file (local development)."""
-    for name in names:
-        try:
-            value = st.secrets.get(name)
-        except Exception:
-            value = None
-        if value:
-            return value
-    for name in names:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return None
-
-
-OPENAI_API_KEY = _get_secret("OPENAI_API_KEY", "openai_api_key")
-GEMINI_API_KEY = _get_secret("GEMINI_API_KEY", "GOOGLE_API_KEY")
-GROQ_API_KEY = _get_secret("GROQ_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("openai_api_key")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 
@@ -124,6 +107,20 @@ st.markdown("""
 [data-testid="stSidebar"] [data-baseweb="select"] div[class*="Option"] {
     color: #d7e7ff !important;
     background: #0a1a36 !important;
+}
+/* Keep sidebar selectboxes visually static while preserving normal typing
+    behavior for main-page selectors such as the customer picker. */
+[data-testid="stSidebar"] [data-baseweb="select"] input,
+[data-testid="stSidebar"] [data-baseweb="select"] input[type="text"],
+[data-testid="stSidebar"] div[data-baseweb="select"] input {
+    caret-color: transparent !important;
+    color: transparent !important;
+    text-shadow: none !important;
+    pointer-events: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    opacity: 0 !important;
 }
 [data-testid="stSidebar"] [data-baseweb="popover"],
 [data-testid="stSidebar"] [role="listbox"],
@@ -231,14 +228,16 @@ st.markdown("""
 
 /* AI summary and actions */
 .genai-card {
-    background: linear-gradient(140deg, rgba(6, 27, 56, 0.9) 0%, rgba(6, 43, 86, 0.9) 100%);
+    background: linear-gradient(140deg, #0a1d3d 0%, #0c2749 100%);
     border-left: 4px solid var(--accent-2);
-    border: 1px solid rgba(66, 123, 197, 0.33);
+    border: 1px solid rgba(90, 145, 215, 0.45);
     border-radius: 10px;
     padding: 1rem 1.2rem;
-    font-size: 0.93rem;
-    line-height: 1.7;
-    color: #deedff;
+    font-size: 0.94rem;
+    line-height: 1.65;
+    letter-spacing: 0.005em;
+    color: #f0f6ff;
+    box-shadow: inset 0 1px 0 rgba(150, 195, 255, 0.08);
 }
 .action-item {
     background: linear-gradient(160deg, rgba(11, 35, 70, 0.85) 0%, rgba(10, 28, 54, 0.85) 100%);
@@ -276,6 +275,359 @@ def card_title(icon: str, text: str) -> None:
 
 def to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
+
+
+def _normalize_pdf_text(text: str) -> str:
+    value = "" if text is None else str(text)
+    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    value = re.sub(r"</?[^>]+>", "", value)
+    replacements = {
+        "•": "-",
+        "–": "-",
+        "—": "-",
+        "↗": "->",
+        "→": "->",
+        "≤": "<=",
+        "≥": ">=",
+        "🔴": "",
+        "🟠": "",
+        "🟡": "",
+        "🟢": "",
+        "🤖": "",
+        "🧭": "",
+        "📊": "",
+        "⚠️": "",
+        "🚨": "",
+        "⬇️": "",
+        "📥": "",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+    value = value.replace("\t", "    ").replace("\r\n", "\n").replace("\r", "\n")
+    return value.encode("latin-1", "replace").decode("latin-1")
+
+
+def _escape_pdf_text(text: str) -> str:
+    return _normalize_pdf_text(text).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _wrap_pdf_lines(text: str, width: int = 95) -> List[str]:
+    normalized = _normalize_pdf_text(text)
+    lines: List[str] = []
+    for paragraph in normalized.split("\n"):
+        stripped = paragraph.strip()
+        if not stripped:
+            lines.append("")
+            continue
+        wrapped = textwrap.wrap(stripped, width=width, break_long_words=False, break_on_hyphens=False)
+        lines.extend(wrapped or [stripped])
+    return lines
+
+
+def _dataframe_pdf_elements(title: str, df: pd.DataFrame, max_rows: int | None = None) -> list[tuple[str, str]]:
+    elements: list[tuple[str, str]] = [("section", title)]
+    if df is None or df.empty:
+        elements.append(("body", "No rows available."))
+        return elements
+
+    display_df = df.copy().fillna("")
+    if max_rows is not None and len(display_df) > max_rows:
+        display_df = display_df.head(max_rows).copy()
+        truncated = True
+    else:
+        truncated = False
+
+    for idx, row in enumerate(display_df.to_dict(orient="records"), start=1):
+        parts = []
+        for col, value in row.items():
+            if isinstance(value, float):
+                value_str = f"{value:.2f}"
+            else:
+                value_str = str(value)
+            if value_str and value_str.lower() != "nan":
+                parts.append(f"{col}: {value_str}")
+        elements.append(("body", f"{idx}. " + " | ".join(parts)))
+
+    if truncated:
+        elements.append(("body", f"Showing first {len(display_df)} of {len(df)} rows in this PDF section."))
+    return elements
+
+
+def _pdf_elements_to_bytes(elements: list[tuple[str, str]]) -> bytes:
+    page_width = 612
+    page_height = 792
+    margin_left = 44
+    margin_top = 748
+    margin_bottom = 48
+    styles = {
+        "title": {"size": 16, "leading": 22, "width": 72, "gap": 6},
+        "section": {"size": 12, "leading": 16, "width": 88, "gap": 4},
+        "meta": {"size": 10, "leading": 13, "width": 96, "gap": 2},
+        "body": {"size": 10, "leading": 13, "width": 96, "gap": 2},
+    }
+
+    pages: list[list[tuple[str, str, int, float]]] = []
+    current_page: list[tuple[str, str, int, float]] = []
+    y = float(margin_top)
+
+    for style, text in elements:
+        spec = styles.get(style, styles["body"])
+        wrapped_lines = _wrap_pdf_lines(text, width=int(spec["width"]))
+        if not wrapped_lines:
+            wrapped_lines = [""]
+
+        for line in wrapped_lines:
+            if y < margin_bottom + spec["leading"]:
+                pages.append(current_page)
+                current_page = []
+                y = float(margin_top)
+            current_page.append((style, line, int(spec["size"]), y))
+            y -= float(spec["leading"])
+        y -= float(spec["gap"])
+
+    if current_page:
+        pages.append(current_page)
+    if not pages:
+        pages = [[("body", "No content available.", 10, float(margin_top))]]
+
+    objects: dict[int, bytes] = {}
+    objects[1] = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+
+    page_object_ids = []
+    next_obj_id = 3
+    for page in pages:
+        content_lines = []
+        for style, line, font_size, line_y in page:
+            escaped = _escape_pdf_text(line)
+            content_lines.append(f"BT /F1 {font_size} Tf {margin_left} {line_y:.2f} Td ({escaped}) Tj ET")
+        content_stream = "\n".join(content_lines).encode("latin-1", "replace")
+        content_obj_id = next_obj_id
+        page_obj_id = next_obj_id + 1
+        next_obj_id += 2
+        objects[content_obj_id] = (
+            f"<< /Length {len(content_stream)} >>\nstream\n".encode("latin-1")
+            + content_stream
+            + b"\nendstream"
+        )
+        objects[page_obj_id] = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] ".encode("latin-1")
+            + f"/Resources << /Font << /F1 1 0 R >> >> /Contents {content_obj_id} 0 R >>".encode("latin-1")
+        )
+        page_object_ids.append(page_obj_id)
+
+    kids = " ".join([f"{obj_id} 0 R" for obj_id in page_object_ids])
+    objects[2] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_object_ids)} >>".encode("latin-1")
+    catalog_obj_id = next_obj_id
+    objects[catalog_obj_id] = b"<< /Type /Catalog /Pages 2 0 R >>"
+
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for obj_id in sorted(objects.keys()):
+        offsets.append(len(pdf))
+        pdf.extend(f"{obj_id} 0 obj\n".encode("latin-1"))
+        pdf.extend(objects[obj_id])
+        pdf.extend(b"\nendobj\n")
+
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(offsets)}\n".encode("latin-1"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("latin-1"))
+    pdf.extend(
+        f"trailer\n<< /Size {len(offsets)} /Root {catalog_obj_id} 0 R >>\nstartxref\n{xref_offset}\n%%EOF".encode("latin-1")
+    )
+    return bytes(pdf)
+
+
+def build_network_summary_pdf_bytes(
+    analyzer,
+    target_customer_id: str,
+    selected_network: str,
+    selected_node: str,
+    network_summary_df: pd.DataFrame,
+    top_nodes_df: pd.DataFrame,
+    theme_table_df: pd.DataFrame,
+    target_summary_text: str,
+    target_summary_status: str,
+    target_actions: List[str],
+    selected_node_summary_text: str,
+    selected_node_summary_status: str,
+    selected_node_actions: List[str],
+    recommendation_text: str,
+    recommendation_status: str,
+) -> bytes:
+    elements: list[tuple[str, str]] = [
+        ("title", "Atlas Detection Lab - Network Summary Export"),
+        ("meta", f"Target customer: {target_customer_id}"),
+        ("meta", f"Selected network focus: {selected_network}"),
+        ("meta", f"Selected node: {selected_node}"),
+        ("meta", f"Analysis window: {getattr(analyzer, 'window_label', '')}"),
+        ("meta", "This PDF contains exported network-level results and the current AI or deterministic narratives shown in the UI."),
+    ]
+    elements.extend(_dataframe_pdf_elements("Network Summary Ranking", network_summary_df))
+    elements.extend(_dataframe_pdf_elements("Top Risky Nodes", top_nodes_df, max_rows=40))
+    elements.extend(_dataframe_pdf_elements("Theme / Subtheme Trigger Log", theme_table_df, max_rows=80))
+
+    elements.append(("section", "Target Customer Investigator Summary"))
+    if target_summary_status:
+        elements.append(("meta", f"Status: {target_summary_status}"))
+    elements.append(("body", target_summary_text or "No target customer summary available."))
+
+    elements.append(("section", "Selected Node Risk Summary"))
+    if selected_node_summary_status:
+        elements.append(("meta", f"Status: {selected_node_summary_status}"))
+    elements.append(("body", selected_node_summary_text or "No selected-node summary available."))
+
+    elements.append(("section", "Network Recommendation"))
+    if recommendation_status:
+        elements.append(("meta", f"Status: {recommendation_status}"))
+    elements.append(("body", recommendation_text or "No recommendation available."))
+
+    return _pdf_elements_to_bytes(elements)
+
+
+def _autosize_excel_sheet(ws, min_width: int = 14, max_width: int = 60) -> None:
+    for column_cells in ws.columns:
+        column_letter = column_cells[0].column_letter
+        max_len = 0
+        for cell in column_cells:
+            value = "" if cell.value is None else str(cell.value)
+            max_len = max(max_len, len(value))
+        ws.column_dimensions[column_letter].width = max(min_width, min(max_width, max_len + 2))
+
+
+def _write_excel_dataframe(writer, sheet_name: str, df: pd.DataFrame) -> None:
+    display_df = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    display_df.to_excel(writer, sheet_name=sheet_name, index=False)
+    ws = writer.book[sheet_name]
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+
+def _write_excel_narrative_sheet(
+    writer,
+    sheet_name: str,
+    title: str,
+    status: str,
+    summary_text: str,
+    actions: List[str],
+    include_actions: bool = True,
+) -> None:
+    rows = []
+    rows.append({"Section": "Title", "Content": title})
+    if status:
+        rows.append({"Section": "Status", "Content": status})
+    rows.append({"Section": "Summary", "Content": summary_text or "No summary available."})
+    if include_actions:
+        if actions:
+            for idx, action in enumerate(actions, start=1):
+                rows.append({"Section": f"Action {idx}", "Content": action})
+        else:
+            rows.append({"Section": "Actions", "Content": "No actions available."})
+    pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
+
+
+def build_network_summary_excel_bytes(
+    analyzer,
+    target_customer_id: str,
+    selected_network: str,
+    selected_node: str,
+    network_summary_df: pd.DataFrame,
+    top_nodes_df: pd.DataFrame,
+    theme_table_df: pd.DataFrame,
+    all_networks_tx_df: pd.DataFrame,
+    target_summary_text: str,
+    target_summary_status: str,
+    target_actions: List[str],
+    selected_node_summary_text: str,
+    selected_node_summary_status: str,
+    selected_node_actions: List[str],
+    recommendation_text: str,
+    recommendation_status: str,
+) -> bytes:
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    overview_rows = [
+        {"Field": "Export Title", "Value": "Atlas Detection Lab - Network Summary Export"},
+        {"Field": "Target Customer", "Value": str(target_customer_id)},
+        {"Field": "Selected Network Focus", "Value": str(selected_network)},
+        {"Field": "Selected Node", "Value": str(selected_node)},
+        {"Field": "Analysis Window", "Value": str(getattr(analyzer, "window_label", ""))},
+        {
+            "Field": "Contents",
+            "Value": "Network summary, risky nodes, theme triggers, all-network transactions, target summary, selected node summary, and network recommendation.",
+        },
+    ]
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame(overview_rows).to_excel(writer, sheet_name="Overview", index=False)
+        _write_excel_dataframe(writer, "Network Summary", network_summary_df)
+        _write_excel_dataframe(writer, "Top Risky Nodes", top_nodes_df)
+        _write_excel_dataframe(writer, "Theme Triggers", theme_table_df)
+        _write_excel_dataframe(writer, "All Transactions", all_networks_tx_df)
+        _write_excel_narrative_sheet(
+            writer,
+            sheet_name="Target Summary",
+            title=f"Target Customer Summary - {target_customer_id}",
+            status=target_summary_status,
+            summary_text=target_summary_text,
+            actions=target_actions,
+            include_actions=False,
+        )
+        _write_excel_narrative_sheet(
+            writer,
+            sheet_name="Selected Node Summary",
+            title=f"Selected Node Summary - {selected_node}",
+            status=selected_node_summary_status,
+            summary_text=selected_node_summary_text,
+            actions=selected_node_actions,
+            include_actions=False,
+        )
+        _write_excel_narrative_sheet(
+            writer,
+            sheet_name="Recommendation",
+            title="Network Recommendation",
+            status=recommendation_status,
+            summary_text=recommendation_text,
+            actions=[],
+            include_actions=False,
+        )
+
+        workbook = writer.book
+        header_fill = PatternFill(fill_type="solid", fgColor="0F2D56")
+        header_font = Font(color="FFFFFF", bold=True)
+        title_fill = PatternFill(fill_type="solid", fgColor="0050A0")
+        title_font = Font(color="FFFFFF", bold=True)
+
+        for ws in workbook.worksheets:
+            ws.sheet_view.showGridLines = True
+            for cell in ws[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+            for row in ws.iter_rows(min_row=2):
+                for cell in row:
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+            if ws.title in {"Target Summary", "Selected Node Summary", "Recommendation"}:
+                ws["A2"].fill = title_fill
+                ws["A2"].font = title_font
+                ws["B2"].fill = title_fill
+                ws["B2"].font = title_font
+                ws.column_dimensions["A"].width = 20
+                ws.column_dimensions["B"].width = 90
+            elif ws.title == "Overview":
+                ws.column_dimensions["A"].width = 24
+                ws.column_dimensions["B"].width = 90
+            else:
+                _autosize_excel_sheet(ws)
+
+        writer.book.active = 0
+
+    return buffer.getvalue()
 
 
 def _format_action_lines(text: str) -> List[str]:
@@ -1446,13 +1798,14 @@ def build_plotly_network_figure(
 
         edge_score = max(node_score_map.get(u, 0.0), node_score_map.get(v, 0.0))
         edge_color = edge_risk_color(edge_score) if is_active_edge else "#d4d8e0"
-        edge_opacity = 0.85 if is_active_edge else 0.22
+        edge_opacity = 0.85 if is_active_edge else 0.40
+        edge_width = 1.8 if is_active_edge else 2.3
         annotations.append(dict(
             ax=ax, ay=ay,
             x=x, y=y,
             xref="x", yref="y", axref="x", ayref="y",
             showarrow=True, arrowhead=2, arrowsize=1.2,
-            arrowwidth=1.8, arrowcolor=edge_color, opacity=edge_opacity,
+            arrowwidth=edge_width, arrowcolor=edge_color, opacity=edge_opacity,
         ))
 
     fig = go.Figure(data=traces)
@@ -1489,20 +1842,20 @@ def render_color_legend() -> None:
     parts = [
         '<div style="display:flex;flex-wrap:wrap;gap:14px;padding:8px 4px;'
         'border-top:1px solid #e0e4ef;margin-top:4px;">',
-        '<span style="font-size:0.8rem;font-weight:600;color:#555;align-self:center;">Node colours:</span>',
+        '<span style="font-size:0.8rem;font-weight:600;color:#ffffff;align-self:center;">Node colours:</span>',
     ]
     for color, label in node_items:
         parts.append(
             f'<span style="display:inline-flex;align-items:center;gap:5px;">'
             f'<svg width="14" height="14"><circle cx="7" cy="7" r="6" fill="{color}" '
             f'stroke="#fff" stroke-width="1.5"/></svg>'
-            f'<span style="font-size:0.8rem;color:#444;">{label}</span></span>'
+            f'<span style="font-size:0.8rem;color:#ffffff;">{label}</span></span>'
         )
     parts.append("</div>")
     parts.append(
         '<div style="display:flex;flex-wrap:wrap;gap:14px;padding:8px 4px;'
         'border-top:1px solid #e0e4ef;margin-top:4px;">'
-        '<span style="font-size:0.8rem;font-weight:600;color:#555;align-self:center;">Arrow/edge colours '
+        '<span style="font-size:0.8rem;font-weight:600;color:#ffffff;align-self:center;">Arrow/edge colours '
         '(risk band of the riskier endpoint, matching the risk summary):</span>'
     )
     for color, label in edge_items:
@@ -1510,15 +1863,15 @@ def render_color_legend() -> None:
             f'<span style="display:inline-flex;align-items:center;gap:5px;">'
             f'<svg width="20" height="10"><line x1="1" y1="5" x2="19" y2="5" stroke="{color}" '
             f'stroke-width="3"/></svg>'
-            f'<span style="font-size:0.8rem;color:#444;">{label}</span></span>'
+            f'<span style="font-size:0.8rem;color:#ffffff;">{label}</span></span>'
         )
     parts.append(
-        '<span style="font-size:0.78rem;color:#888;align-self:center;margin-left:6px;">'
+        '<span style="font-size:0.78rem;color:#ffffff;align-self:center;margin-left:6px;">'
         '↗ Arrows = transaction direction (originator → beneficiary), attached to node boundary</span>'
     )
     parts.append("</div>")
     parts.append(
-        '<div style="padding:6px 4px 2px;color:#6b7280;font-size:0.78rem;">'
+        '<div style="padding:6px 4px 2px;color:#ffffff;font-size:0.78rem;">'
         'In Full Network view, soft transparent halos indicate the split sub-network each node belongs to '
         '(target customer appears in all split networks).</div>'
     )
@@ -1574,9 +1927,47 @@ The weighted components shown in the breakdown are the actual contribution value
 """)
 
 
+def resolve_effective_network_for_node(
+    analyzer,
+    node_rankings: pd.DataFrame,
+    selected_network: str,
+    selected_node: str,
+    target_customer_id: str,
+) -> str:
+    selected_network_str = str(selected_network)
+    selected_node_str = str(selected_node)
+    target_str = str(target_customer_id)
+    full_network_id = str(getattr(analyzer, "full_network_id", "Network-Full"))
+
+    # Target-customer rule:
+    # Full Network -> top network, Specific Network -> that network.
+    if selected_node_str == target_str:
+        if selected_network_str == full_network_id:
+            if isinstance(analyzer.network_summary, pd.DataFrame) and not analyzer.network_summary.empty:
+                return str(analyzer.network_summary.iloc[0].get("network_id", selected_network_str))
+        return selected_network_str
+
+    # Non-target fallback under Full Network focus.
+    if selected_network_str == full_network_id and not node_rankings.empty:
+        selected_node_rows = node_rankings[node_rankings["customer_id"].astype(str) == selected_node_str].copy()
+        if not selected_node_rows.empty:
+            return str(selected_node_rows.iloc[0].get("network_id", selected_network_str))
+
+    return selected_network_str
+
+
 def render_dynamic_score_breakdown(analyzer, outputs, selected_network: str, selected_node: str) -> None:
     node_rankings = outputs.get("node_rankings", pd.DataFrame())
     theme_triggers = outputs.get("theme_triggers", pd.DataFrame())
+    target_cid = str(getattr(analyzer, "target_customer_id", ""))
+    effective_network = resolve_effective_network_for_node(
+        analyzer=analyzer,
+        node_rankings=node_rankings,
+        selected_network=selected_network,
+        selected_node=selected_node,
+        target_customer_id=target_cid,
+    )
+    is_target_node = str(selected_node) == target_cid
 
     with st.expander("🧮 Actual Values Used For Computation (For Demo purposes only, not for FCI)", expanded=True):
         net_col, node_col = st.columns(2)
@@ -1584,7 +1975,7 @@ def render_dynamic_score_breakdown(analyzer, outputs, selected_network: str, sel
         with net_col:
             st.markdown("**Network Risk Score (Selected Network)**")
             net_row_df = analyzer.network_summary[
-                analyzer.network_summary["network_id"].astype(str) == str(selected_network)
+                analyzer.network_summary["network_id"].astype(str) == str(effective_network)
             ]
             if net_row_df.empty:
                 st.info("No network score data available for selected network.")
@@ -1592,8 +1983,13 @@ def render_dynamic_score_breakdown(analyzer, outputs, selected_network: str, sel
                 net_row = net_row_df.iloc[0]
                 total_value = float(net_row.get("total_amount_usd", 0.0) or 0.0)
 
-                net_nodes = node_rankings[node_rankings["network_id"].astype(str) == str(selected_network)].copy()
-                net_themes = theme_triggers[theme_triggers["network_id"].astype(str) == str(selected_network)].copy()
+                if is_target_node and str(selected_network) == str(getattr(analyzer, "full_network_id", "Network-Full")):
+                    st.caption(f"Showing score inputs for top network {effective_network} for the target customer.")
+                elif str(effective_network) != str(selected_network):
+                    st.caption(f"Showing score inputs for {effective_network} because Full Network focus is selected.")
+
+                net_nodes = node_rankings[node_rankings["network_id"].astype(str) == str(effective_network)].copy()
+                net_themes = theme_triggers[theme_triggers["network_id"].astype(str) == str(effective_network)].copy()
 
                 theme_severity = float(net_themes["severity_score"].mean()) if not net_themes.empty else 0.0
                 high_risk_share = float((net_nodes["final_node_risk_score"] >= 70).mean() * 100) if not net_nodes.empty else 0.0
@@ -1617,7 +2013,7 @@ def render_dynamic_score_breakdown(analyzer, outputs, selected_network: str, sel
 
                 exposure_count = float(len(flagged_nodes))
                 exposure_txn_value = 0.0
-                txn_df = analyzer.network_txn.get(str(selected_network), pd.DataFrame()).copy()
+                txn_df = analyzer.network_txn.get(str(effective_network), pd.DataFrame()).copy()
                 if not txn_df.empty and flagged_nodes:
                     impacted = txn_df[
                         txn_df["originator_id"].astype(str).isin(flagged_nodes)
@@ -1656,7 +2052,7 @@ def render_dynamic_score_breakdown(analyzer, outputs, selected_network: str, sel
         with node_col:
             st.markdown("**Node Risk Score (Selected Node)**")
             node_row_df = node_rankings[
-                (node_rankings["network_id"].astype(str) == str(selected_network))
+                (node_rankings["network_id"].astype(str) == str(effective_network))
                 & (node_rankings["customer_id"].astype(str) == str(selected_node))
             ]
 
@@ -1769,18 +2165,38 @@ def render_dynamic_score_breakdown(analyzer, outputs, selected_network: str, sel
 
 
 def render_case_snapshot(
+    analyzer,
     selected_node: str,
+    target_customer_id: str,
     selected_network: str,
+    full_network_id: str,
+    txn_scope_network: str,
     node_df: pd.DataFrame,
     node_rankings: pd.DataFrame,
     node_tx: pd.DataFrame,
     kyc: dict,
+    scoped_network_tx_export: pd.DataFrame,
+    all_networks_tx_export: pd.DataFrame,
 ) -> None:
     cid = str(selected_node)
+    target_cid = str(target_customer_id)
+    effective_network = str(selected_network)
+    if cid == target_cid:
+        if str(selected_network) == str(full_network_id):
+            if isinstance(analyzer.network_summary, pd.DataFrame) and not analyzer.network_summary.empty:
+                effective_network = str(analyzer.network_summary.iloc[0].get("network_id", selected_network))
+        else:
+            effective_network = str(selected_network)
+    elif str(selected_network) == str(full_network_id):
+        node_matches = node_rankings[node_rankings["customer_id"].astype(str) == cid]
+        if not node_matches.empty:
+            effective_network = str(node_matches.iloc[0].get("network_id", selected_network))
+
     rank_match = node_rankings[
-        (node_rankings["network_id"].astype(str) == str(selected_network))
+        (node_rankings["network_id"].astype(str) == str(effective_network))
         & (node_rankings["customer_id"].astype(str) == cid)
     ]
+
     risk_score = pagerank_c = flags_c = prox_c = beh_c = 0.0
     key_reasons = ""
     sanctions = pep = sar = exited = False
@@ -1828,6 +2244,10 @@ def render_case_snapshot(
     with right_col:
         with st.container(border=True):
             card_title("📊", "Risk Score Breakdown (For Demo purposes only, not for FCI)")
+            if cid == target_cid and str(selected_network) == str(full_network_id):
+                st.caption(f"Using top network {effective_network} for target customer while Full Network is selected.")
+            elif str(effective_network) != str(selected_network):
+                st.caption(f"Using node's split network {effective_network} while Full Network focus is selected.")
             sc1, sc2 = st.columns(2)
             sc1.metric("Composite Score", f"{risk_score:.1f}", help=f"Overall node risk score with current logic (effective max {NODE_SCORE_MAX:.1f})")
             sc2.metric("Risk Band", risk_band)
@@ -1844,8 +2264,43 @@ def render_case_snapshot(
                 st.markdown(f"**Key reasons:** {key_reasons.replace('|', ' · ')}")
 
     with st.container(border=True):
+        node_tx_display = node_tx.copy()
+        if not node_tx_display.empty and "network_id" not in node_tx_display.columns:
+            if (
+                isinstance(scoped_network_tx_export, pd.DataFrame)
+                and not scoped_network_tx_export.empty
+                and "transaction_id" in node_tx_display.columns
+                and "transaction_id" in scoped_network_tx_export.columns
+                and "network_id" in scoped_network_tx_export.columns
+            ):
+                network_lookup = scoped_network_tx_export[["transaction_id", "network_id"]].drop_duplicates("transaction_id")
+                node_tx_display = node_tx_display.merge(network_lookup, on="transaction_id", how="left")
+                node_tx_display["network_id"] = node_tx_display["network_id"].fillna(str(txn_scope_network))
+            else:
+                node_tx_display.insert(0, "network_id", str(txn_scope_network))
+
+            cols = ["network_id"] + [c for c in node_tx_display.columns if c != "network_id"]
+            node_tx_display = node_tx_display[cols]
+
         card_title("💳", f"Linked Transactions ({len(node_tx)} total)")
-        st.dataframe(node_tx, use_container_width=True)
+        st.dataframe(node_tx_display, use_container_width=True)
+        dcol1, dcol2 = st.columns(2)
+        with dcol1:
+            st.download_button(
+                "📥 Download All Transactions (Selected Network Focus)",
+                data=to_csv_bytes(scoped_network_tx_export),
+                file_name=f"transactions_{str(txn_scope_network)}.csv",
+                mime="text/csv",
+                key=f"download_selected_network_tx_{str(txn_scope_network)}",
+            )
+        with dcol2:
+            st.download_button(
+                "📥 Download All Transactions (All Networks)",
+                data=to_csv_bytes(all_networks_tx_export),
+                file_name="transactions_all_networks.csv",
+                mime="text/csv",
+                key="download_all_networks_tx",
+            )
 
 
 def render_executive_summary_cards(analyzer, outputs) -> None:
@@ -2049,19 +2504,26 @@ def build_investigator_target_summary(
 ):
     cid = str(target_customer_id)
     node_rankings = outputs.get("node_rankings", pd.DataFrame())
+    effective_network = resolve_effective_network_for_node(
+        analyzer=analyzer,
+        node_rankings=node_rankings,
+        selected_network=selected_network,
+        selected_node=cid,
+        target_customer_id=cid,
+    )
     rank_row = node_rankings[
-        (node_rankings["network_id"].astype(str) == str(selected_network))
+        (node_rankings["network_id"].astype(str) == str(effective_network))
         & (node_rankings["customer_id"].astype(str) == cid)
     ]
     rank = rank_row.iloc[0] if not rank_row.empty else None
 
     network_row_df = analyzer.network_summary[
-        analyzer.network_summary["network_id"].astype(str) == str(selected_network)
+        analyzer.network_summary["network_id"].astype(str) == str(effective_network)
     ]
     network_row = network_row_df.iloc[0] if not network_row_df.empty else None
 
     themes_df = analyzer.theme_log[
-        analyzer.theme_log["network_id"].astype(str) == str(selected_network)
+        analyzer.theme_log["network_id"].astype(str) == str(effective_network)
     ].sort_values("severity_score", ascending=False).head(5)
 
     txn_count = int(len(target_tx))
@@ -2130,7 +2592,7 @@ def build_investigator_target_summary(
 
     summary = "\n\n".join([
         "EXECUTIVE SUMMARY\n"
-        f"Target customer {cid} ({customer_name or 'name unavailable'}) is assessed as {risk_band} risk in {selected_network}, "
+        f"Target customer {cid} ({customer_name or 'name unavailable'}) is assessed as {risk_band} risk in {effective_network}, "
         f"with node score {node_score:.2f} and selected-network score {network_score:.2f}. "
         f"The analysis covered {analyzer.window_label} and discovered {network_count} {networks_word} around the target. "
         f"Within the selected network, the target has {txn_count} linked transactions totaling USD {total_value:,.2f}; activity is split across {outgoing_count} outgoing and {incoming_count} incoming flows. "
@@ -2163,7 +2625,7 @@ def build_investigator_target_summary(
     return summary, actions[:6], {
         "target_customer_id": cid,
         "customer_name": customer_name,
-        "selected_network": selected_network,
+        "selected_network": effective_network,
         "window_label": analyzer.window_label,
         "network_count": network_count,
         "network_score": network_score,
@@ -2509,46 +2971,6 @@ if "analyzer" in st.session_state:
         st.warning("No networks available for visualization.")
         st.stop()
 
-    with st.container(border=True):
-        card_title("🗂️", "Network Selection")
-        selected_network = st.selectbox("Top Network ID", network_ids, index=0)
-
-    # ── Part B Row 1: Network summary ─────────────────────────────
-    with st.container(border=True):
-        card_title("📊", "Network Summary & Ranking")
-        network_summary = outputs["network_rankings"].copy()
-        st.dataframe(network_summary, use_container_width=True)
-
-    # ── Part B Row 2: two side-by-side cards ──────────────────────
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-        with st.container(border=True):
-            card_title("⚠️", "Top Risky Nodes")
-            top_nodes_table = outputs["node_rankings"][
-                [
-                    "network_id",
-                    "customer_id",
-                    "customer_name",
-                    "country",
-                    "entity_type",
-                    "final_node_risk_score",
-                    "key_reasons",
-                ]
-            ].copy()
-            top_nodes_table = top_nodes_table.sort_values(["network_id", "final_node_risk_score"], ascending=[True, False])
-            top_nodes_table = top_nodes_table.groupby("network_id").head(20).reset_index(drop=True)
-            st.dataframe(top_nodes_table, use_container_width=True)
-
-    with col_right:
-        with st.container(border=True):
-            card_title("🚨", "Theme / Subtheme Trigger Log")
-            theme_table = outputs["theme_triggers"][
-                ["network_id", "theme", "subtheme", "severity_score", "evidence_summary", "example_transaction_ids"]
-            ].copy()
-            theme_table = theme_table.sort_values(["network_id", "severity_score"], ascending=[True, False])
-            st.dataframe(theme_table, use_container_width=True)
-
     # ── Network Graph card ────────────────────────────────────────
     selected_node = ""
     with st.container(border=True):
@@ -2560,13 +2982,15 @@ if "analyzer" in st.session_state:
             index=0,
             format_func=lambda n: "Full Network" if str(n) == str(analyzer.full_network_id) else str(n),
         )
+        # Network Focus is the canonical selector for downstream network-specific views.
+        selected_network = str(network_focus)
         if len(network_ids) > 1:
             st.caption("Select a focused split network to keep it active; other split networks are greyed out in the full graph.")
 
         node_df, edge_df = analyzer.get_network_graph_data(analyzer.full_network_id)
         cluster_map = analyzer.get_full_network_clusters() if len(network_ids) > 1 else None
         active_cluster_id = None
-        if str(network_focus) != str(analyzer.full_network_id):
+        if len(network_ids) > 1 and str(network_focus) != str(analyzer.full_network_id):
             try:
                 active_cluster_id = int(str(network_focus).split("-")[-1])
             except Exception:
@@ -2615,7 +3039,9 @@ if "analyzer" in st.session_state:
                                 default_idx = node_id_list.index(clicked_id)
                     except Exception:
                         st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
+                    render_color_legend()
             elif HAS_AGRAPH:
+                render_color_legend()
                 graph_nodes, graph_edges = build_graph_objects(node_df, edge_df, target_customer_id)
                 agraph_result = agraph(
                     nodes=graph_nodes,
@@ -2630,13 +3056,12 @@ if "analyzer" in st.session_state:
                     st.session_state["_graph_selected_node"] = str(agraph_result)
                     default_idx = node_id_list.index(str(agraph_result))
             else:
+                render_color_legend()
                 dot_graph = build_graphviz_dot(node_df, edge_df, target_customer_id)
                 st.graphviz_chart(dot_graph, use_container_width=True)
 
             if len(network_ids) > 1:
                 st.caption("Soft transparent highlights indicate split sub-networks inside the full 2-hop network.")
-
-            render_color_legend()
 
             with st.expander("📋 All nodes in this network", expanded=False):
                 outward_metrics = (
@@ -2663,6 +3088,25 @@ if "analyzer" in st.session_state:
                     "customer_id", "customer_name", "country", "entity_type",
                     "final_node_risk_score", "sanctions_flag", "pep_flag", "sar_flag", "exited_flag",
                 ]].copy()
+
+                if "network_id" in node_df.columns:
+                    all_nodes_df["network_id"] = node_df["network_id"].astype(str)
+                elif isinstance(cluster_map, dict) and cluster_map:
+                    fallback_network_id = (
+                        str(network_focus)
+                        if str(network_focus) != str(analyzer.full_network_id)
+                        else str(analyzer.full_network_id)
+                    )
+                    all_nodes_df["network_id"] = all_nodes_df["customer_id"].astype(str).map(
+                        lambda cid: f"Network-{int(cluster_map[cid])}" if cid in cluster_map else fallback_network_id
+                    )
+                else:
+                    all_nodes_df["network_id"] = (
+                        str(network_focus)
+                        if str(network_focus)
+                        else str(analyzer.full_network_id)
+                    )
+
                 all_nodes_df = all_nodes_df.merge(outward_metrics, on="customer_id", how="left")
                 all_nodes_df = all_nodes_df.merge(inward_metrics, on="customer_id", how="left")
 
@@ -2682,6 +3126,7 @@ if "analyzer" in st.session_state:
 
                 display_df = all_nodes_df.rename(
                     columns={
+                        "network_id": "Network ID",
                         "customer_id": "Customer ID",
                         "customer_name": "Customer Name",
                         "country": "Country",
@@ -2700,6 +3145,10 @@ if "analyzer" in st.session_state:
                     }
                 )
 
+                if "Network ID" in display_df.columns:
+                    display_cols = ["Network ID"] + [c for c in display_df.columns if c != "Network ID"]
+                    display_df = display_df[display_cols]
+
                 st.dataframe(
                     display_df.sort_values("Overall Risk Score", ascending=False),
                     use_container_width=True,
@@ -2713,8 +3162,43 @@ if "analyzer" in st.session_state:
             )
             st.session_state["_graph_selected_node"] = selected_node
 
-            render_network_score_explanation()
-            render_dynamic_score_breakdown(analyzer, outputs, selected_network, selected_node)
+            # Requested: hide score methodology/demo computation sections from UI.
+
+    # ── Part B Row 1: Network summary ─────────────────────────────
+    with st.container(border=True):
+        card_title("📊", "Network Summary & Ranking")
+        network_summary = outputs["network_rankings"].copy()
+        st.dataframe(network_summary, use_container_width=True)
+
+    # ── Part B Row 2: two side-by-side cards ──────────────────────
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        with st.container(border=True):
+            card_title("⚠️", "Top Risky Nodes")
+            top_nodes_table = outputs["node_rankings"][
+                [
+                    "network_id",
+                    "customer_id",
+                    "customer_name",
+                    "country",
+                    "entity_type",
+                    "final_node_risk_score",
+                    "key_reasons",
+                ]
+            ].copy()
+            top_nodes_table = top_nodes_table.sort_values(["network_id", "final_node_risk_score"], ascending=[True, False])
+            top_nodes_table = top_nodes_table.groupby("network_id").head(20).reset_index(drop=True)
+            st.dataframe(top_nodes_table, use_container_width=True)
+
+    with col_right:
+        with st.container(border=True):
+            card_title("🚨", "Theme / Subtheme Trigger Log")
+            theme_table = outputs["theme_triggers"][
+                ["network_id", "theme", "subtheme", "severity_score", "example_transaction_ids"]
+            ].copy()
+            theme_table = theme_table.sort_values(["network_id", "severity_score"], ascending=[True, False])
+            st.dataframe(theme_table, use_container_width=True)
 
     # ── Case Snapshot ─────────────────────────────────────────────
     ai_summary = ""
@@ -2725,10 +3209,61 @@ if "analyzer" in st.session_state:
     target_ai_status = ""
 
     if selected_node:
-        node_tx = analyzer.get_node_transactions(selected_network, selected_node)
+        # Keep linked transactions aligned with the graph scope (Network Focus) and selected node.
+        txn_scope_network = str(selected_network)
+        node_rankings = outputs.get("node_rankings", pd.DataFrame())
+        effective_selected_network = resolve_effective_network_for_node(
+            analyzer=analyzer,
+            node_rankings=node_rankings,
+            selected_network=selected_network,
+            selected_node=str(selected_node),
+            target_customer_id=str(target_customer_id),
+        )
+        effective_target_network = resolve_effective_network_for_node(
+            analyzer=analyzer,
+            node_rankings=node_rankings,
+            selected_network=selected_network,
+            selected_node=str(target_customer_id),
+            target_customer_id=str(target_customer_id),
+        )
+        node_tx = analyzer.get_node_transactions(txn_scope_network, selected_node)
         kyc = analyzer.get_customer_kyc(selected_node)
-        target_tx = analyzer.get_node_transactions(selected_network, target_customer_id)
+        target_tx = analyzer.get_node_transactions(effective_target_network, target_customer_id)
         target_kyc = analyzer.get_customer_kyc(target_customer_id)
+
+        all_network_frames = []
+        for nid, net_df in analyzer.network_txn.items():
+            export_df = net_df.copy()
+            export_df.insert(0, "network_id", str(nid))
+            all_network_frames.append(export_df)
+        all_networks_tx_export = (
+            pd.concat(all_network_frames, ignore_index=True)
+            if all_network_frames
+            else pd.DataFrame(columns=["network_id"] + list(analyzer.df.columns))
+        )
+
+        if str(txn_scope_network) == str(analyzer.full_network_id):
+            scoped_network_tx_export = analyzer.full_network_txn.copy()
+            if not scoped_network_tx_export.empty:
+                if not all_networks_tx_export.empty and "transaction_id" in scoped_network_tx_export.columns:
+                    txn_to_network = all_networks_tx_export[["transaction_id", "network_id"]].drop_duplicates("transaction_id")
+                    scoped_network_tx_export = scoped_network_tx_export.merge(
+                        txn_to_network,
+                        on="transaction_id",
+                        how="left",
+                    )
+                    scoped_network_tx_export["network_id"] = scoped_network_tx_export["network_id"].fillna(str(analyzer.full_network_id))
+                    cols = ["network_id"] + [c for c in scoped_network_tx_export.columns if c != "network_id"]
+                    scoped_network_tx_export = scoped_network_tx_export[cols]
+                else:
+                    scoped_network_tx_export.insert(0, "network_id", str(analyzer.full_network_id))
+        else:
+            scoped_network_tx_export = analyzer.network_txn.get(str(txn_scope_network), pd.DataFrame()).copy()
+            if scoped_network_tx_export.empty:
+                scoped_network_tx_export = pd.DataFrame(columns=["network_id"] + list(analyzer.df.columns))
+            else:
+                scoped_network_tx_export.insert(0, "network_id", str(txn_scope_network))
+
         target_ai_summary, target_ai_actions, target_context = build_investigator_target_summary(
             analyzer=analyzer,
             outputs=outputs,
@@ -2861,26 +3396,25 @@ if "analyzer" in st.session_state:
             )
 
         fallback_summary = build_selected_customer_genai_summary(
-            selected_network=selected_network,
+            selected_network=effective_selected_network,
             selected_customer_id=str(selected_node),
             node_df=node_df,
             node_rankings=outputs["node_rankings"],
             node_tx=node_tx,
         )
-        node_rankings = outputs.get("node_rankings", pd.DataFrame())
         rank_row = node_rankings[
-            (node_rankings["network_id"].astype(str) == str(selected_network))
+            (node_rankings["network_id"].astype(str) == str(effective_selected_network))
             & (node_rankings["customer_id"].astype(str) == str(selected_node))
         ]
         rank = rank_row.iloc[0] if not rank_row.empty else None
 
         network_row_df = analyzer.network_summary[
-            analyzer.network_summary["network_id"].astype(str) == str(selected_network)
+            analyzer.network_summary["network_id"].astype(str) == str(effective_selected_network)
         ]
         network_row = network_row_df.iloc[0] if not network_row_df.empty else None
 
         top_themes_df = analyzer.theme_log[
-            analyzer.theme_log["network_id"].astype(str) == str(selected_network)
+            analyzer.theme_log["network_id"].astype(str) == str(effective_selected_network)
         ].sort_values("severity_score", ascending=False).head(5)
         theme_names = [str(r.subtheme) for r in top_themes_df.itertuples(index=False)]
 
@@ -2923,7 +3457,7 @@ if "analyzer" in st.session_state:
 
         node_context = {
             "selected_node": str(selected_node),
-            "selected_network": str(selected_network),
+            "selected_network": str(effective_selected_network),
             "node_score": node_score,
             "network_score": network_score,
             "txn_count": txn_count,
@@ -2940,7 +3474,7 @@ if "analyzer" in st.session_state:
         deterministic_summary, deterministic_actions, _ = build_ai_customer_brief(
             analyzer=analyzer,
             outputs=outputs,
-            selected_network=selected_network,
+            selected_network=effective_selected_network,
             selected_node=str(selected_node),
             node_df=node_df,
             node_tx=node_tx,
@@ -2955,7 +3489,7 @@ if "analyzer" in st.session_state:
             else "AI agent disabled; showing deterministic summary/actions."
         )
 
-        current_node_key = f"{selected_network}|{selected_node}"
+        current_node_key = f"{selected_network}|{effective_selected_network}|{selected_node}"
         previous_node_key = st.session_state.get("_selected_node_ai_key")
         if previous_node_key != current_node_key:
             st.session_state["_selected_node_ai_key"] = current_node_key
@@ -2971,12 +3505,18 @@ if "analyzer" in st.session_state:
         with st.container(border=True):
             card_title("🗂️", f"Case Snapshot — {selected_node}")
             render_case_snapshot(
+                analyzer=analyzer,
                 selected_node=selected_node,
+                target_customer_id=str(target_customer_id),
                 selected_network=selected_network,
+                full_network_id=str(analyzer.full_network_id),
+                txn_scope_network=txn_scope_network,
                 node_df=node_df,
                 node_rankings=outputs["node_rankings"],
                 node_tx=node_tx,
                 kyc=kyc,
+                scoped_network_tx_export=scoped_network_tx_export,
+                all_networks_tx_export=all_networks_tx_export,
             )
 
         with st.container(border=True):
@@ -3102,20 +3642,14 @@ if "analyzer" in st.session_state:
             if ai_status:
                 st.caption(ai_status)
 
-    # ── Next Actions card ─────────────────────────────────────────
+    # ── AI Model Recommendation card ──────────────────────────────
     with st.container(border=True):
-        card_title("🎯", "Next Investigative Actions")
-        actions_html = "".join(
-            [f'<div class="action-item"><b>{i}.</b> {a}</div>' for i, a in enumerate(ai_actions, start=1)]
-        )
-        st.markdown(actions_html, unsafe_allow_html=True)
-
-        st.markdown("---")
         _rec_n_hops = int(getattr(analyzer.config, "n_hops", 2))
         _rec_lookback_days = int(getattr(analyzer.config, "lookback_days", 180))
-        st.markdown(
-            f"**🧭 AI Model Recommendation — {_rec_n_hops}-Hop Network Risk Assessment "
-            f"({_rec_lookback_days}-day lookback)**"
+        card_title(
+            "🧭",
+            f"AI Model Recommendation — {_rec_n_hops}-Hop Network Risk Assessment "
+            f"({_rec_lookback_days}-day lookback)",
         )
         st.caption(
             f"Scans networks up to {_rec_n_hops} hops from the target for SAR, Sanctions, PEP, Exit, or DRA-alert "
@@ -3143,23 +3677,90 @@ if "analyzer" in st.session_state:
                 unsafe_allow_html=True,
             )
             st.caption(st.session_state["ai_network_recommendation_status"])
+            st.download_button(
+                "📥 Download AI Model Recommendation",
+                st.session_state["ai_network_recommendation_text"].encode("utf-8"),
+                f"ai_model_recommendation_{target_customer_id}.txt",
+                "text/plain",
+                key="ai_network_recommendation_download_btn",
+            )
+
+    export_recommendation_text = str(st.session_state.get("ai_network_recommendation_text", "") or "")
+    export_recommendation_status = str(st.session_state.get("ai_network_recommendation_status", "") or "")
+    if not export_recommendation_text:
+        export_context_text = _build_network_flag_context(analyzer, outputs, str(target_customer_id))
+        export_recommendation_text = _build_deterministic_network_recommendation(
+            export_context_text,
+            n_hops=int(getattr(analyzer.config, "n_hops", 2)),
+            lookback_days=int(getattr(analyzer.config, "lookback_days", 180)),
+        )
+        export_recommendation_status = (
+            "AI model recommendation not generated in the UI; included deterministic network recommendation in the PDF export."
+        )
+
+    selected_node_for_export = str(selected_node) if "selected_node" in locals() else str(target_customer_id)
+    network_summary_pdf_bytes = build_network_summary_pdf_bytes(
+        analyzer=analyzer,
+        target_customer_id=str(target_customer_id),
+        selected_network=str(selected_network),
+        selected_node=selected_node_for_export,
+        network_summary_df=network_summary,
+        top_nodes_df=top_nodes_table,
+        theme_table_df=theme_table,
+        target_summary_text=target_ai_summary,
+        target_summary_status=target_ai_status,
+        target_actions=target_ai_actions,
+        selected_node_summary_text=ai_summary,
+        selected_node_summary_status=ai_status,
+        selected_node_actions=ai_actions,
+        recommendation_text=export_recommendation_text,
+        recommendation_status=export_recommendation_status,
+    )
+    network_summary_excel_bytes = build_network_summary_excel_bytes(
+        analyzer=analyzer,
+        target_customer_id=str(target_customer_id),
+        selected_network=str(selected_network),
+        selected_node=selected_node_for_export,
+        network_summary_df=network_summary,
+        top_nodes_df=top_nodes_table,
+        theme_table_df=theme_table,
+        all_networks_tx_df=all_networks_tx_export,
+        target_summary_text=target_ai_summary,
+        target_summary_status=target_ai_status,
+        target_actions=target_ai_actions,
+        selected_node_summary_text=ai_summary,
+        selected_node_summary_status=ai_status,
+        selected_node_actions=ai_actions,
+        recommendation_text=export_recommendation_text,
+        recommendation_status=export_recommendation_status,
+    )
 
     # ── Downloads card ────────────────────────────────────────────
     with st.container(border=True):
         card_title("⬇️", "Download Results")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, _spacer = st.columns([1, 1, 3])
         with c1:
-            st.download_button("📥 Network Summary", to_csv_bytes(network_summary), "network_summary_ranking.csv", "text/csv")
+            st.download_button(
+                "📥 Full Summary Excel",
+                network_summary_excel_bytes,
+                f"network_summary_{target_customer_id}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_network_summary_excel_btn",
+            )
         with c2:
-            st.download_button("📥 Risky Nodes", to_csv_bytes(top_nodes_table), "top_risky_nodes.csv", "text/csv")
-        with c3:
-            st.download_button("📥 Theme Triggers", to_csv_bytes(theme_table), "theme_trigger_log.csv", "text/csv")
+            st.download_button(
+                "📥 Full Summary PDF",
+                network_summary_pdf_bytes,
+                f"network_summary_{target_customer_id}.pdf",
+                "application/pdf",
+                key="download_network_summary_pdf_btn",
+            )
 
     with st.container(border=True):
         card_title("💬", "Ask Atlas")
         st.text_area(
             "Ask Atlas",
-            value="Ask anything to Atlas regarding current CASE_ID",
+            value="Ask anything to Atlas regarding the networks found",
             disabled=True,
             label_visibility="collapsed",
             height=90,
