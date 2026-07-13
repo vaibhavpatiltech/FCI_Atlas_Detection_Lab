@@ -40,10 +40,27 @@ except ImportError:
 
 from transaction_networks import AnalyzerConfig, FinancialCrimeNetworkAnalyzer, SCHEMA_COLUMNS
 
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("openai_api_key")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+from dotenv import load_dotenv
+
+load_dotenv()      # Works locally
+
+OPENAI_API_KEY = (
+    st.secrets.get("OPENAI_API_KEY")
+    or os.getenv("OPENAI_API_KEY")
+    or os.getenv("openai_api_key")
+)
+
+GEMINI_API_KEY = (
+    st.secrets.get("GEMINI_API_KEY")
+    or st.secrets.get("GOOGLE_API_KEY")
+    or os.getenv("GEMINI_API_KEY")
+    or os.getenv("GOOGLE_API_KEY")
+)
+
+GROQ_API_KEY = (
+    st.secrets.get("GROQ_API_KEY")
+    or os.getenv("GROQ_API_KEY")
+)
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 
