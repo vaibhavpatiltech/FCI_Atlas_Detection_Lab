@@ -38,39 +38,51 @@ except ImportError:
 
 from transaction_networks import AnalyzerConfig, FinancialCrimeNetworkAnalyzer, SCHEMA_COLUMNS
 
-load_dotenv(dotenv_path=Path(__file__).parent / ".env")  # Works locally
-
-
-def _get_secret(*names: str):
-    """Look up a secret first in st.secrets (e.g. Streamlit Cloud), then
-    fall back to the environment / .env file (local development)."""
-    for name in names:
-        try:
-            value = st.secrets.get(name)
-        except Exception:
-            value = None
-        if value:
-            return value
-    for name in names:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return None
-
-
-OPENAI_API_KEY = _get_secret("OPENAI_API_KEY", "openai_api_key")
-GEMINI_API_KEY = _get_secret("GEMINI_API_KEY", "GOOGLE_API_KEY")
-GROQ_API_KEY = _get_secret("GROQ_API_KEY")
+load_dotenv(dotenv_path=Path(__file__).parent / ".env")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("openai_api_key")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 
-st.set_page_config(page_title="Atlas Detection System", layout="wide", page_icon="🔍")
+st.set_page_config(page_title="Atlas Detection Lab", layout="wide", page_icon="🔍")
 
 st.markdown("""
 <style>
-/* ── Global ── */
-[data-testid="stAppViewContainer"] { background: #f0f2f6; }
-[data-testid="stSidebar"] { background: #1a1f2e !important; }
+/* Theme tokens derived from UI_Theme.jpg */
+:root {
+    --bg-0: #020817;
+    --bg-1: #06162d;
+    --bg-2: #0c2143;
+    --panel: #0a1935;
+    --panel-2: #11294f;
+    --ink: #dbe8ff;
+    --muted: #9db6dd;
+    --line: #224a84;
+    --accent: #0050a0;
+    --accent-2: #0060b0;
+    --accent-soft: #003070;
+}
+
+/* Global canvas */
+[data-testid="stAppViewContainer"] {
+    background: radial-gradient(1200px 700px at 86% -10%, #113469 0%, transparent 55%),
+                            radial-gradient(900px 600px at -10% 10%, #072349 0%, transparent 48%),
+                            linear-gradient(160deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%);
+}
+[data-testid="stHeader"] {
+    background: rgba(2, 8, 23, 0.38) !important;
+    border-bottom: 1px solid rgba(88, 143, 220, 0.2);
+    backdrop-filter: blur(6px);
+}
+
+/* Sidebar shell */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #061123 0%, #0a1d3d 100%) !important;
+    border-right: 1px solid rgba(75, 129, 205, 0.32);
+}
+
+/* Sidebar form controls */
 [data-testid="stSidebar"] input,
 [data-testid="stSidebar"] textarea,
 [data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stMarkdownContainer"] p,
@@ -78,134 +90,163 @@ st.markdown("""
 [data-testid="stSidebar"] [data-baseweb="select"] div[class*="ValueContainer"] *,
 [data-testid="stSidebar"] [data-baseweb="select"] div[class*="singleValue"],
 [data-testid="stSidebar"] [data-baseweb="select"] div[class*="placeholder"],
-[data-testid="stSidebar"] [data-baseweb="input"] input { 
-  color: #000000 !important; 
-  background: #ffffff !important;
-  font-weight: 500 !important;
-}
-[data-testid="stSidebar"] [data-baseweb="select"] div[class*="Option"] {
-  color: #000000 !important;
-  background: #ffffff !important;
-  font-weight: 500 !important;
+[data-testid="stSidebar"] [data-baseweb="input"] input {
+    color: var(--ink) !important;
+    background: #0b2142 !important;
+    font-weight: 500 !important;
 }
 [data-testid="stSidebar"] input,
-[data-testid="stSidebar"] textarea {
-  background: #ffffff !important;
-  border: 2px solid #4f67d8 !important;
-  border-radius: 6px !important;
-}
-/* Selectbox styling */
-[data-testid="stSidebar"] [data-baseweb="select"] {
-  background: #ffffff !important;
-}
+[data-testid="stSidebar"] textarea,
 [data-testid="stSidebar"] [data-baseweb="select"] > div {
-  background: #ffffff !important;
-  border: 2px solid #4f67d8 !important;
-  border-radius: 6px !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 8px !important;
+    box-shadow: inset 0 0 0 1px rgba(0, 96, 176, 0.15);
 }
-/* Dropdown menu background */
-[data-testid="stSidebar"] [data-baseweb="popover"] {
-  background: #f5f5f5 !important;
+[data-testid="stSidebar"] [data-baseweb="select"] div[class*="Option"] {
+    color: #d7e7ff !important;
+    background: #0a1a36 !important;
 }
-[data-testid="stSidebar"] [role="listbox"] {
-  background: #f5f5f5 !important;
-}
+[data-testid="stSidebar"] [data-baseweb="popover"],
+[data-testid="stSidebar"] [role="listbox"],
 [data-testid="stSidebar"] [role="option"] {
-  background: #f5f5f5 !important;
-  color: #000000 !important;
-  font-weight: 600 !important;
+    background: #0a1a36 !important;
+    color: #d7e7ff !important;
 }
 [data-testid="stSidebar"] [role="option"]:hover {
-  background: #e0e0ff !important;
-  color: #000000 !important;
+    background: #11335f !important;
 }
-/* +/- stepper buttons */
 [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"],
 [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"],
 [data-testid="stSidebar"] button[data-testid="stNumberInputStepDown"],
 [data-testid="stSidebar"] button[data-testid="stNumberInputStepUp"],
 [data-testid="stSidebar"] .stNumberInput button {
-  color: #ffffff !important;
-  background: #4f67d8 !important;
-  border: 2px solid #2d3a5e !important;
-  border-radius: 4px !important;
-  font-weight: 600 !important;
+    color: #eef5ff !important;
+    background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%) !important;
+    border: 1px solid #2a65a6 !important;
+    border-radius: 5px !important;
+    font-weight: 700 !important;
 }
 [data-testid="stSidebar"] [data-testid="stNumberInputStepDown"]:hover,
 [data-testid="stSidebar"] [data-testid="stNumberInputStepUp"]:hover,
 [data-testid="stSidebar"] button[data-testid="stNumberInputStepDown"]:hover,
 [data-testid="stSidebar"] button[data-testid="stNumberInputStepUp"]:hover,
 [data-testid="stSidebar"] .stNumberInput button:hover {
-  background: #6578e8 !important;
+    filter: brightness(1.12);
 }
-[data-testid="stSidebar"] .stNumberInput input::placeholder { color: #999999 !important; }
+[data-testid="stSidebar"] .stNumberInput input::placeholder { color: #8eaad0 !important; }
 [data-testid="stSidebar"] .stSelectbox label,
 [data-testid="stSidebar"] .stNumberInput label,
-[data-testid="stSidebar"] .stCheckbox label { color: #ffffff !important; font-size: 0.82rem; font-weight: 600 !important; }
-[data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { color: #ffffff !important; }
+[data-testid="stSidebar"] .stCheckbox label {
+    color: #d3e4ff !important;
+    font-size: 0.82rem;
+    font-weight: 600 !important;
+}
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: #e7f1ff !important;
+}
 
-/* ── App header ── */
+/* App cards and panels */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: linear-gradient(160deg, rgba(8, 27, 56, 0.85) 0%, rgba(8, 22, 44, 0.85) 100%);
+    border: 1px solid rgba(63, 112, 183, 0.34);
+    border-radius: 12px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(165, 206, 255, 0.06);
+}
+
+/* Header */
 .app-header {
-  background: linear-gradient(135deg, #1a1f2e 0%, #2d3a5e 100%);
-  border-radius: 12px;
-  padding: 1.4rem 2rem 1.2rem;
-  margin-bottom: 1.2rem;
-  box-shadow: 0 4px 18px rgba(0,0,0,0.18);
+    background: linear-gradient(130deg, #07162f 0%, #0f2d56 58%, #0050a0 100%);
+    border: 1px solid rgba(106, 157, 229, 0.34);
+    border-radius: 14px;
+    padding: 1.4rem 2rem 1.2rem;
+    margin-bottom: 1.2rem;
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
 }
-.app-header h1 { color: #ffffff; margin: 0 0 0.25rem; font-size: 1.6rem; }
-.app-header p  { color: #8fa3c8; margin: 0; font-size: 0.88rem; }
+.app-header h1 {
+    color: #f2f7ff;
+    margin: 0 0 0.25rem;
+    font-size: 1.62rem;
+    letter-spacing: 0.01em;
+}
+.app-header p {
+    color: #b7d0f0;
+    margin: 0;
+    font-size: 0.88rem;
+}
 
-/* ── Section card title ── */
+/* Section title and text */
 .card-title {
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: #1a1f2e;
-  margin-bottom: 0.6rem;
-  padding-bottom: 0.45rem;
-  border-bottom: 2px solid #e0e4ef;
-  letter-spacing: 0.01em;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #dceaff;
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 2px solid rgba(56, 106, 176, 0.56);
+    letter-spacing: 0.01em;
+}
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stCaptionContainer"] {
+    color: #c1d7f7;
 }
 
-/* ── Risk badge ── */
-.badge { display:inline-block; padding:2px 10px; border-radius:12px;
-         font-size:0.78rem; font-weight:600; margin-right:4px; }
-.badge-red    { background:#fde8e8; color:#b30000; }
-.badge-orange { background:#fff0e0; color:#c95f02; }
-.badge-purple { background:#f0eaf8; color:#6a3d9a; }
-.badge-blue   { background:#e6f0ff; color:#1f77b4; }
+/* Keep Streamlit metric labels readable in narrow columns */
+[data-testid="stMetricLabel"] p {
+    white-space: normal !important;
+    line-height: 1.2 !important;
+}
 
-/* ── GenAI card ── */
+/* Risk badge */
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    margin-right: 4px;
+}
+.badge-red { background: #3f1014; color: #ff9aa0; }
+.badge-orange { background: #44280c; color: #ffcb85; }
+.badge-purple { background: #2e1d49; color: #ccb7ff; }
+.badge-blue { background: #0f3157; color: #8fd0ff; }
+
+/* AI summary and actions */
 .genai-card {
-  background: linear-gradient(135deg, #f8f9ff 0%, #eef2ff 100%);
-  border-left: 4px solid #4f67d8;
-  border-radius: 8px;
-  padding: 1rem 1.2rem;
-  font-size: 0.93rem;
-  line-height: 1.7;
-  color: #2c3550;
+    background: linear-gradient(140deg, rgba(6, 27, 56, 0.9) 0%, rgba(6, 43, 86, 0.9) 100%);
+    border-left: 4px solid var(--accent-2);
+    border: 1px solid rgba(66, 123, 197, 0.33);
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    font-size: 0.93rem;
+    line-height: 1.7;
+    color: #deedff;
 }
-
-/* ── Next-actions list ── */
 .action-item {
-  background: #ffffff;
-  border: 1px solid #dde3f0;
-  border-radius: 8px;
-  padding: 0.6rem 1rem;
-  margin-bottom: 0.45rem;
-  font-size: 0.9rem;
-  color: #2c3550;
+    background: linear-gradient(160deg, rgba(11, 35, 70, 0.85) 0%, rgba(10, 28, 54, 0.85) 100%);
+    border: 1px solid rgba(59, 112, 184, 0.34);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    margin-bottom: 0.45rem;
+    font-size: 0.9rem;
+    color: #d9e9ff;
 }
 
-/* ── Download buttons ── */
-.stDownloadButton > button {
-  width: 100%;
-  border-radius: 8px !important;
-  background: #1a1f2e !important;
-  color: #fff !important;
-  border: none !important;
-  font-weight: 600 !important;
+/* Buttons */
+.stDownloadButton > button,
+[data-testid="stButton"] > button {
+    width: 100%;
+    border-radius: 8px !important;
+    background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%) !important;
+    color: #f0f7ff !important;
+    border: 1px solid #2f6cb0 !important;
+    font-weight: 700 !important;
+    box-shadow: 0 8px 20px rgba(0, 48, 112, 0.35);
 }
-.stDownloadButton > button:hover { background: #2d3a5e !important; }
+.stDownloadButton > button:hover,
+[data-testid="stButton"] > button:hover {
+    filter: brightness(1.1);
+    transform: translateY(-1px);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1116,6 +1157,26 @@ def edge_risk_color(risk_score: float) -> str:
     return color
 
 
+def _hex_to_rgba(color_hex: str, alpha: float) -> str:
+    color_hex = str(color_hex or "").strip().lstrip("#")
+    if len(color_hex) != 6:
+        return f"rgba(148, 163, 184, {alpha})"
+    r = int(color_hex[0:2], 16)
+    g = int(color_hex[2:4], 16)
+    b = int(color_hex[4:6], 16)
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def _cluster_highlight_color(cluster_id: int) -> str:
+    palette = [
+        "#60a5fa", "#34d399", "#f59e0b", "#f472b6", "#a78bfa",
+        "#22d3ee", "#fb7185", "#86efac", "#fca5a5", "#c4b5fd",
+    ]
+    if int(cluster_id) <= 0:
+        return "#1f4aff"
+    return palette[(int(cluster_id) - 1) % len(palette)]
+
+
 def build_network_layout(node_ids, edge_df: pd.DataFrame, scale: float):
     graph = nx.Graph()
     graph.add_nodes_from([str(n) for n in node_ids])
@@ -1244,7 +1305,13 @@ def build_graphviz_dot(node_df: pd.DataFrame, edge_df: pd.DataFrame, target_cust
     return "\n".join(lines)
 
 
-def build_plotly_network_figure(node_df: pd.DataFrame, edge_df: pd.DataFrame, target_customer_id: str):
+def build_plotly_network_figure(
+    node_df: pd.DataFrame,
+    edge_df: pd.DataFrame,
+    target_customer_id: str,
+    cluster_map: dict | None = None,
+    active_cluster_id: int | None = None,
+):
     ordered_rows = list(node_df.itertuples(index=False))
     if not ordered_rows:
         return None
@@ -1261,6 +1328,12 @@ def build_plotly_network_figure(node_df: pd.DataFrame, edge_df: pd.DataFrame, ta
     for n in ordered_ids:
         r = id_to_row[n]
         x, y = pos[n]
+        cluster_id = int(cluster_map.get(str(n), -1)) if isinstance(cluster_map, dict) and cluster_map else -1
+        is_active_node = (
+            active_cluster_id is None
+            or str(n) == str(target_customer_id)
+            or cluster_id == int(active_cluster_id)
+        )
         node_x.append(x)
         node_y.append(y)
         node_text.append("<br>".join([
@@ -1272,10 +1345,13 @@ def build_plotly_network_figure(node_df: pd.DataFrame, edge_df: pd.DataFrame, ta
             f"Sanctions: {bool(r.sanctions_flag)} | PEP: {bool(r.pep_flag)} | SAR: {bool(r.sar_flag)} | Exited: {bool(r.exited_flag)}",
         ]))
         node_sizes.append(14 + min(30, float(r.final_node_risk_score) / 3.0))
-        node_colors.append(graph_color(
-            bool(r.sanctions_flag), bool(r.pep_flag), bool(r.sar_flag),
-            bool(r.exited_flag), str(n) == str(target_customer_id),
-        ))
+        if is_active_node:
+            node_colors.append(graph_color(
+                bool(r.sanctions_flag), bool(r.pep_flag), bool(r.sar_flag),
+                bool(r.exited_flag), str(n) == str(target_customer_id),
+            ))
+        else:
+            node_colors.append("#b8bec8")
         node_ids.append(n)
 
     node_trace = go.Scatter(
@@ -1288,6 +1364,31 @@ def build_plotly_network_figure(node_df: pd.DataFrame, edge_df: pd.DataFrame, ta
         name="Customers",
     )
 
+    traces = []
+    if isinstance(cluster_map, dict) and cluster_map:
+        halo_colors = []
+        for n in ordered_ids:
+            cid = int(cluster_map.get(str(n), -1))
+            base = _cluster_highlight_color(cid)
+            halo_colors.append(_hex_to_rgba(base, 0.24))
+
+        halo_trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode="markers",
+            hoverinfo="skip",
+            marker=dict(
+                size=[s + 20 for s in node_sizes],
+                color=halo_colors,
+                line=dict(width=0),
+                opacity=1.0,
+            ),
+            name="Network clusters",
+        )
+        traces.append(halo_trace)
+
+    traces.append(node_trace)
+
     # Directed arrows as annotations (no overlapping line layer needed)
     node_score_map = {n: float(getattr(id_to_row[n], "final_node_risk_score", 0.0) or 0.0) for n in ordered_ids}
     annotations = []
@@ -1296,6 +1397,16 @@ def build_plotly_network_figure(node_df: pd.DataFrame, edge_df: pd.DataFrame, ta
         v = str(e.beneficiary_id)
         if u not in pos or v not in pos:
             continue
+
+        u_cluster = int(cluster_map.get(u, -1)) if isinstance(cluster_map, dict) and cluster_map else -1
+        v_cluster = int(cluster_map.get(v, -1)) if isinstance(cluster_map, dict) and cluster_map else -1
+        is_active_edge = (
+            active_cluster_id is None
+            or (
+                (u_cluster in (0, int(active_cluster_id)))
+                and (v_cluster in (0, int(active_cluster_id)))
+            )
+        )
 
         x0, y0 = pos[u]
         x1, y1 = pos[v]
@@ -1315,15 +1426,17 @@ def build_plotly_network_figure(node_df: pd.DataFrame, edge_df: pd.DataFrame, ta
         y = y1 - (dy / length) * dst_offset
 
         edge_score = max(node_score_map.get(u, 0.0), node_score_map.get(v, 0.0))
+        edge_color = edge_risk_color(edge_score) if is_active_edge else "#d4d8e0"
+        edge_opacity = 0.85 if is_active_edge else 0.22
         annotations.append(dict(
             ax=ax, ay=ay,
             x=x, y=y,
             xref="x", yref="y", axref="x", ayref="y",
             showarrow=True, arrowhead=2, arrowsize=1.2,
-            arrowwidth=1.8, arrowcolor=edge_risk_color(edge_score), opacity=0.85,
+            arrowwidth=1.8, arrowcolor=edge_color, opacity=edge_opacity,
         ))
 
-    fig = go.Figure(data=[node_trace])
+    fig = go.Figure(data=traces)
     fig.update_layout(
         height=640,
         margin=dict(l=10, r=10, t=10, b=10),
@@ -1385,6 +1498,11 @@ def render_color_legend() -> None:
         '↗ Arrows = transaction direction (originator → beneficiary), attached to node boundary</span>'
     )
     parts.append("</div>")
+    parts.append(
+        '<div style="padding:6px 4px 2px;color:#6b7280;font-size:0.78rem;">'
+        'In Full Network view, soft transparent halos indicate the split sub-network each node belongs to '
+        '(target customer appears in all split networks).</div>'
+    )
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
@@ -1727,15 +1845,52 @@ def render_executive_summary_cards(analyzer, outputs) -> None:
 
     top_network_score = float(top_net["network_risk_score"])
     top_nodes = int(top_net["nodes"])
-    composite_total = top_network_score + top_nodes + total_flagged
+
+    top_network_id = str(top_net["network_id"])
+    top_node_total_usd = 0.0
+    top_node_id = "N/A"
+    if not node_table.empty and "network_id" in node_table.columns and "final_node_risk_score" in node_table.columns:
+        top_net_nodes = node_table[node_table["network_id"].astype(str) == top_network_id]
+        if not top_net_nodes.empty:
+            top_node_row = top_net_nodes.sort_values("final_node_risk_score", ascending=False).iloc[0]
+            top_node_id = str(top_node_row.get("customer_id", "N/A") or "N/A")
+            top_node_tx = analyzer.get_node_transactions(top_network_id, top_node_id)
+            if isinstance(top_node_tx, pd.DataFrame) and not top_node_tx.empty and "amount_usd" in top_node_tx.columns:
+                top_node_total_usd = float(pd.to_numeric(top_node_tx["amount_usd"], errors="coerce").fillna(0.0).sum())
+
+    # Show the selected target customer's actual DRA score from node profiles.
+    selected_customer_dra = 0.0
+    try:
+        profiles = getattr(analyzer, "node_profiles", pd.DataFrame())
+        if isinstance(profiles, pd.DataFrame) and not profiles.empty and "dra_score" in profiles.columns:
+            target_rows = profiles[profiles["customer_id"].astype(str) == str(analyzer.target_customer_id)]
+            if not target_rows.empty:
+                selected_customer_dra = float(pd.to_numeric(target_rows["dra_score"], errors="coerce").fillna(0.0).max())
+    except Exception:
+        selected_customer_dra = 0.0
+
+    def _compact_usd(value: float) -> str:
+        v = float(value or 0.0)
+        av = abs(v)
+        if av >= 1_000_000_000:
+            return f"${v/1_000_000_000:.1f}B"
+        if av >= 1_000_000:
+            return f"${v/1_000_000:.1f}M"
+        if av >= 1_000:
+            return f"${v/1_000:.1f}K"
+        return f"${v:,.0f}"
 
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Networks Found", int(len(summary)))
-    m2.metric("Top Network Score", f"{top_network_score:.1f} / 100")
+    m2.metric("Top Network Score", f"{top_network_score:.0f}", help="Score is on a 0-100 scale")
     m3.metric("Nodes (Top Network)", top_nodes)
     m4.metric("Flagged Nodes (All)", total_flagged)
-    m5.metric("Top Network Value", f"${float(top_net['total_amount_usd']):,.0f}")
-    m6.metric("DRA Score", f"{composite_total:.1f}", help="Top Network Score + Nodes (Top Network) + Flagged Nodes (All)")
+    m5.metric(
+        "Top Node USD",
+        _compact_usd(top_node_total_usd),
+        help=f"Total amount_usd linked to the highest-score node in {top_network_id} (customer: {top_node_id})",
+    )
+    m6.metric("DRA Score", f"{selected_customer_dra:.1f}", help="Selected customer DRA score from profile fields in the loaded dataset")
 
     st.markdown(
         f"**Lookback:** {analyzer.window_label} &nbsp;|&nbsp; **Target:** `{analyzer.target_customer_id}` "
@@ -2127,8 +2282,8 @@ def build_ai_customer_brief(
 
 st.markdown("""
 <div class="app-header">
-  <h1>🔍 Atlas Detection System</h1>
-  <p>Banking Financial Crime Investigation &mdash; network discovery, red spots, node risk ranking &amp; scoring</p>
+  <h1>🔍 Atlas Detection Lab</h1>
+  <p>AI-Enabled Network Intelligence & Recommendation Engine</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -2148,7 +2303,7 @@ with st.sidebar:
         ai_model = st.selectbox(
             "OpenAI model",
             ["gpt-5.5", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
-            index=0,
+            index=2,
         )
     elif ai_provider == "Gemini":
         ai_model = st.selectbox(
@@ -2177,9 +2332,9 @@ with st.sidebar:
     else:
         st.caption("OpenAI key: OPENAI_API_KEY. Gemini key: GEMINI_API_KEY or GOOGLE_API_KEY. Groq key: GROQ_API_KEY.")
 
-with st.container(border=True):
-    card_title("📂", "Dataset")
-    st.caption("Using local dataset: synthetic_transactions_complex_INTERNAL.csv")
+# with st.container(border=True):
+#     card_title("📂", "Dataset")
+#     st.caption("Using local dataset: synthetic_transactions_complex_INTERNAL.csv")
 
 input_df = None
 try:
@@ -2238,17 +2393,80 @@ if input_df is not None:
             ranking_weight_mode=parse_mode(ranking_mode),
         )
 
-        with st.spinner("Running network analysis..."):
-            analyzer = FinancialCrimeNetworkAnalyzer(
-                df=input_df,
-                target_customer_id=target_customer_id,
-                config=cfg,
-            )
-            outputs = analyzer.run()
+        analyzer = None
+        outputs = None
+        lookback_adjustment_message = None
 
-        st.session_state["analyzer"] = analyzer
-        st.session_state["outputs"] = outputs
-        st.session_state["target_customer_id"] = target_customer_id
+        with st.spinner("Running network analysis..."):
+            try:
+                analyzer = FinancialCrimeNetworkAnalyzer(
+                    df=input_df,
+                    target_customer_id=target_customer_id,
+                    config=cfg,
+                )
+                outputs = analyzer.run()
+            except ValueError as ex:
+                if (
+                    str(ex) == "target_customer_id is not present in lookback-filtered transactions."
+                    and not bool(use_all_dates)
+                ):
+                    dt_series = pd.to_datetime(input_df["transaction_datetime"], errors="coerce", utc=True).dt.tz_localize(None)
+                    valid_mask = dt_series.notna()
+                    if valid_mask.any():
+                        valid_df = input_df.loc[valid_mask].copy()
+                        valid_df["_txn_dt"] = dt_series.loc[valid_mask].values
+                        cid = str(target_customer_id)
+                        target_mask = (
+                            (valid_df["originator_id"].astype(str) == cid)
+                            | (valid_df["beneficiary_id"].astype(str) == cid)
+                        )
+                        target_tx = valid_df.loc[target_mask]
+
+                        if not target_tx.empty:
+                            max_dt = valid_df["_txn_dt"].max()
+                            target_last_dt = target_tx["_txn_dt"].max()
+                            min_required_lookback = max(int((max_dt - target_last_dt).days) + 1, 1)
+                            adjusted_lookback = max(int(lookback_days), int(min_required_lookback))
+
+                            adjusted_cfg = AnalyzerConfig(
+                                use_all_dates=False,
+                                lookback_days=int(adjusted_lookback),
+                                n_hops=int(n_hops),
+                                ranking_weight_mode=parse_mode(ranking_mode),
+                            )
+
+                            analyzer = FinancialCrimeNetworkAnalyzer(
+                                df=input_df,
+                                target_customer_id=target_customer_id,
+                                config=adjusted_cfg,
+                            )
+                            outputs = analyzer.run()
+
+                            lookback_adjustment_message = (
+                                f"Requested lookback ({int(lookback_days)} days) did not include any transactions for selected customer "
+                                f"{cid}. Latest transaction for this customer is on {target_last_dt.date()}, while dataset max date is "
+                                f"{max_dt.date()}. Lookback was auto-adjusted to {int(adjusted_lookback)} days (minimum needed: "
+                                f"{int(min_required_lookback)} days) so customer transactions can be analyzed."
+                            )
+                        else:
+                            st.error(
+                                f"Selected customer {cid} has no valid-dated transactions in the dataset, so lookback cannot be auto-adjusted."
+                            )
+                    else:
+                        st.error("No valid transaction dates found in dataset; unable to adjust lookback automatically.")
+                else:
+                    st.error(f"Analysis failed: {ex}")
+            except Exception as ex:
+                st.error(f"Analysis failed: {ex}")
+
+        if analyzer is not None and outputs is not None:
+            st.session_state["analyzer"] = analyzer
+            st.session_state["outputs"] = outputs
+            st.session_state["target_customer_id"] = target_customer_id
+            if lookback_adjustment_message:
+                st.session_state["lookback_adjustment_message"] = lookback_adjustment_message
+            else:
+                st.session_state.pop("lookback_adjustment_message", None)
 
 if "analyzer" in st.session_state:
     analyzer: FinancialCrimeNetworkAnalyzer = st.session_state["analyzer"]
@@ -2256,6 +2474,8 @@ if "analyzer" in st.session_state:
     target_customer_id = st.session_state["target_customer_id"]
 
     st.success("✅ Analysis completed")
+    if st.session_state.get("lookback_adjustment_message"):
+        st.info(st.session_state["lookback_adjustment_message"])
 
     # ── Part A: Executive Summary ──────────────────────────────────
     with st.container(border=True):
@@ -2272,7 +2492,7 @@ if "analyzer" in st.session_state:
 
     with st.container(border=True):
         card_title("🗂️", "Network Selection")
-        selected_network = st.selectbox("Network ID", network_ids, index=0, label_visibility="collapsed")
+        selected_network = st.selectbox("Top Network ID", network_ids, index=0)
 
     # ── Part B Row 1: Network summary ─────────────────────────────
     with st.container(border=True):
@@ -2313,8 +2533,25 @@ if "analyzer" in st.session_state:
     # ── Network Graph card ────────────────────────────────────────
     selected_node = ""
     with st.container(border=True):
-        card_title("🕸️", f"Network Graph — {selected_network}")
-        node_df, edge_df = analyzer.get_network_graph_data(selected_network)
+        graph_title = "Full Network"
+        card_title("🕸️", f"Network Graph — {graph_title}")
+        network_focus = st.selectbox(
+            "Network Focus",
+            [analyzer.full_network_id] + network_ids,
+            index=0,
+            format_func=lambda n: "Full Network" if str(n) == str(analyzer.full_network_id) else str(n),
+        )
+        if len(network_ids) > 1:
+            st.caption("Select a focused split network to keep it active; other split networks are greyed out in the full graph.")
+
+        node_df, edge_df = analyzer.get_network_graph_data(analyzer.full_network_id)
+        cluster_map = analyzer.get_full_network_clusters() if len(network_ids) > 1 else None
+        active_cluster_id = None
+        if str(network_focus) != str(analyzer.full_network_id):
+            try:
+                active_cluster_id = int(str(network_focus).split("-")[-1])
+            except Exception:
+                active_cluster_id = None
 
         if node_df.empty:
             st.info("No graph data for selected network.")
@@ -2336,22 +2573,14 @@ if "analyzer" in st.session_state:
             elif "_graph_selected_node" in st.session_state and st.session_state["_graph_selected_node"] in node_id_list:
                 default_idx = node_id_list.index(str(st.session_state["_graph_selected_node"]))
 
-            if HAS_AGRAPH:
-                graph_nodes, graph_edges = build_graph_objects(node_df, edge_df, target_customer_id)
-                agraph_result = agraph(
-                    nodes=graph_nodes,
-                    edges=graph_edges,
-                    config=Config(
-                        width="100%", height=580, directed=True, physics=True,
-                        hierarchical=False, nodeHighlightBehavior=True,
-                        highlightColor="#f7a7a6", collapsible=False,
-                    ),
+            if HAS_PLOTLY:
+                fig = build_plotly_network_figure(
+                    node_df,
+                    edge_df,
+                    target_customer_id,
+                    cluster_map=cluster_map,
+                    active_cluster_id=active_cluster_id,
                 )
-                if agraph_result and str(agraph_result) in node_id_list:
-                    st.session_state["_graph_selected_node"] = str(agraph_result)
-                    default_idx = node_id_list.index(str(agraph_result))
-            elif HAS_PLOTLY:
-                fig = build_plotly_network_figure(node_df, edge_df, target_customer_id)
                 if fig is not None:
                     try:
                         event = st.plotly_chart(
@@ -2367,9 +2596,26 @@ if "analyzer" in st.session_state:
                                 default_idx = node_id_list.index(clicked_id)
                     except Exception:
                         st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
+            elif HAS_AGRAPH:
+                graph_nodes, graph_edges = build_graph_objects(node_df, edge_df, target_customer_id)
+                agraph_result = agraph(
+                    nodes=graph_nodes,
+                    edges=graph_edges,
+                    config=Config(
+                        width="100%", height=580, directed=True, physics=True,
+                        hierarchical=False, nodeHighlightBehavior=True,
+                        highlightColor="#f7a7a6", collapsible=False,
+                    ),
+                )
+                if agraph_result and str(agraph_result) in node_id_list:
+                    st.session_state["_graph_selected_node"] = str(agraph_result)
+                    default_idx = node_id_list.index(str(agraph_result))
             else:
                 dot_graph = build_graphviz_dot(node_df, edge_df, target_customer_id)
                 st.graphviz_chart(dot_graph, use_container_width=True)
+
+            if len(network_ids) > 1:
+                st.caption("Soft transparent highlights indicate split sub-networks inside the full 2-hop network.")
 
             render_color_legend()
 
@@ -2602,246 +2848,106 @@ if "analyzer" in st.session_state:
             node_rankings=outputs["node_rankings"],
             node_tx=node_tx,
         )
-        if not use_ai_agent:
-            ai_summary = fallback_summary
-            ai_status = "AI agent disabled; showing deterministic summary/actions."
-        elif ai_provider == "OpenAI":
-            node_rankings = outputs.get("node_rankings", pd.DataFrame())
-            rank_row = node_rankings[
-                (node_rankings["network_id"].astype(str) == str(selected_network))
-                & (node_rankings["customer_id"].astype(str) == str(selected_node))
-            ]
-            rank = rank_row.iloc[0] if not rank_row.empty else None
+        node_rankings = outputs.get("node_rankings", pd.DataFrame())
+        rank_row = node_rankings[
+            (node_rankings["network_id"].astype(str) == str(selected_network))
+            & (node_rankings["customer_id"].astype(str) == str(selected_node))
+        ]
+        rank = rank_row.iloc[0] if not rank_row.empty else None
 
-            network_row_df = analyzer.network_summary[
-                analyzer.network_summary["network_id"].astype(str) == str(selected_network)
-            ]
-            network_row = network_row_df.iloc[0] if not network_row_df.empty else None
+        network_row_df = analyzer.network_summary[
+            analyzer.network_summary["network_id"].astype(str) == str(selected_network)
+        ]
+        network_row = network_row_df.iloc[0] if not network_row_df.empty else None
 
-            top_themes_df = analyzer.theme_log[
-                analyzer.theme_log["network_id"].astype(str) == str(selected_network)
-            ].sort_values("severity_score", ascending=False).head(5)
-            theme_names = [str(r.subtheme) for r in top_themes_df.itertuples(index=False)]
+        top_themes_df = analyzer.theme_log[
+            analyzer.theme_log["network_id"].astype(str) == str(selected_network)
+        ].sort_values("severity_score", ascending=False).head(5)
+        theme_names = [str(r.subtheme) for r in top_themes_df.itertuples(index=False)]
 
-            txn_count = int(len(node_tx))
-            total_value = float(node_tx["amount_usd"].sum()) if txn_count else 0.0
-            avg_value = float(node_tx["amount_usd"].mean()) if txn_count else 0.0
-            outgoing_count = int((node_tx["originator_id"].astype(str) == str(selected_node)).sum()) if txn_count else 0
-            incoming_count = int((node_tx["beneficiary_id"].astype(str) == str(selected_node)).sum()) if txn_count else 0
+        txn_count = int(len(node_tx))
+        total_value = float(node_tx["amount_usd"].sum()) if txn_count else 0.0
+        avg_value = float(node_tx["amount_usd"].mean()) if txn_count else 0.0
+        outgoing_count = int((node_tx["originator_id"].astype(str) == str(selected_node)).sum()) if txn_count else 0
+        incoming_count = int((node_tx["beneficiary_id"].astype(str) == str(selected_node)).sum()) if txn_count else 0
 
-            sanctions = bool(rank["sanctions_flag"]) if rank is not None and "sanctions_flag" in rank else False
-            pep = bool(rank["pep_flag"]) if rank is not None and "pep_flag" in rank else False
-            sar = bool(rank["sar_flag"]) if rank is not None and "sar_flag" in rank else False
-            exited = bool(rank["exited_flag"]) if rank is not None and "exited_flag" in rank else False
-            node_score = float(rank.get("final_node_risk_score", 0.0) or 0.0) if rank is not None else 0.0
-            network_score = float(network_row.get("network_risk_score", 0.0) or 0.0) if network_row is not None else 0.0
+        sanctions = bool(rank["sanctions_flag"]) if rank is not None and "sanctions_flag" in rank else False
+        pep = bool(rank["pep_flag"]) if rank is not None and "pep_flag" in rank else False
+        sar = bool(rank["sar_flag"]) if rank is not None and "sar_flag" in rank else False
+        exited = bool(rank["exited_flag"]) if rank is not None and "exited_flag" in rank else False
+        node_score = float(rank.get("final_node_risk_score", 0.0) or 0.0) if rank is not None else 0.0
+        network_score = float(network_row.get("network_risk_score", 0.0) or 0.0) if network_row is not None else 0.0
 
-            pagerank_c = float(rank.get("pagerank_component", 0.0) or 0.0) if rank is not None else 0.0
-            flags_c = float(rank.get("flags_component", 0.0) or 0.0) if rank is not None else 0.0
-            prox_c = float(rank.get("proximity_component", 0.0) or 0.0) if rank is not None else 0.0
-            beh_c = float(rank.get("behaviour_component", 0.0) or 0.0) if rank is not None else 0.0
+        pagerank_c = float(rank.get("pagerank_component", 0.0) or 0.0) if rank is not None else 0.0
+        flags_c = float(rank.get("flags_component", 0.0) or 0.0) if rank is not None else 0.0
+        prox_c = float(rank.get("proximity_component", 0.0) or 0.0) if rank is not None else 0.0
+        beh_c = float(rank.get("behaviour_component", 0.0) or 0.0) if rank is not None else 0.0
 
-            drivers = [
-                ("pagerank influence", pagerank_c),
-                ("direct risk flags", flags_c),
-                ("proximity to flagged entities", prox_c),
-                ("behavioural patterns", beh_c),
-            ]
-            drivers = sorted(drivers, key=lambda x: x[1], reverse=True)
-            top_driver_text = ", ".join([f"{k} ({v:.1f})" for k, v in drivers[:3]])
+        drivers = [
+            ("pagerank influence", pagerank_c),
+            ("direct risk flags", flags_c),
+            ("proximity to flagged entities", prox_c),
+            ("behavioural patterns", beh_c),
+        ]
+        drivers = sorted(drivers, key=lambda x: x[1], reverse=True)
+        top_driver_text = ", ".join([f"{k} ({v:.1f})" for k, v in drivers[:3]])
 
-            flag_text = []
-            if sanctions:
-                flag_text.append("Sanctions")
-            if pep:
-                flag_text.append("PEP")
-            if sar:
-                flag_text.append("SAR")
-            if exited:
-                flag_text.append("Exited")
+        flag_text = []
+        if sanctions:
+            flag_text.append("Sanctions")
+        if pep:
+            flag_text.append("PEP")
+        if sar:
+            flag_text.append("SAR")
+        if exited:
+            flag_text.append("Exited")
 
-            node_context = {
-                "selected_node": str(selected_node),
-                "selected_network": str(selected_network),
-                "node_score": node_score,
-                "network_score": network_score,
-                "txn_count": txn_count,
-                "total_value": total_value,
-                "avg_value": avg_value,
-                "outgoing_count": outgoing_count,
-                "incoming_count": incoming_count,
-                "top_driver_text": top_driver_text,
-                "flag_text": flag_text,
-                "top_theme_text": ", ".join(theme_names[:4]) if theme_names else "none",
-                "top_counterparty_text": "none",
-            }
+        node_context = {
+            "selected_node": str(selected_node),
+            "selected_network": str(selected_network),
+            "node_score": node_score,
+            "network_score": network_score,
+            "txn_count": txn_count,
+            "total_value": total_value,
+            "avg_value": avg_value,
+            "outgoing_count": outgoing_count,
+            "incoming_count": incoming_count,
+            "top_driver_text": top_driver_text,
+            "flag_text": flag_text,
+            "top_theme_text": ", ".join(theme_names[:4]) if theme_names else "none",
+            "top_counterparty_text": "none",
+        }
 
-            if ai_provider == "OpenAI":
-                if OPENAI_API_KEY:
-                    try:
-                        with st.spinner(f"Generating selected node summary with OpenAI ({ai_model})..."):
-                            model_summary = _generate_openai_node_risk_summary(
-                                node_context=node_context,
-                                baseline_text=fallback_summary,
-                                model=ai_model,
-                            )
-                            model_actions = _generate_openai_next_actions(
-                                node_context=node_context,
-                                fallback_actions=ai_actions,
-                                model=ai_model,
-                            )
-                        ai_summary = model_summary if model_summary.strip() else fallback_summary
-                        ai_actions = model_actions if model_actions else ai_actions
-                        ai_status = f"OpenAI summary generated using model '{ai_model}'."
-                    except Exception as ex:
-                        ai_summary = fallback_summary
-                        ai_status = _openai_error_status(ex)
-                else:
-                    ai_summary = fallback_summary
-                    ai_status = "OPENAI_API_KEY is not configured; showing deterministic summary/actions."
-            elif ai_provider == "Gemini":
-                if GEMINI_API_KEY:
-                    try:
-                        with st.spinner(f"Generating selected node summary with Gemini ({ai_model})..."):
-                            model_summary = _generate_gemini_node_risk_summary(
-                                node_context=node_context,
-                                baseline_text=fallback_summary,
-                                model=ai_model,
-                            )
-                            model_actions = _generate_gemini_next_actions(
-                                node_context=node_context,
-                                fallback_actions=ai_actions,
-                                model=ai_model,
-                            )
-                        ai_summary = model_summary if model_summary.strip() else fallback_summary
-                        ai_actions = model_actions if model_actions else ai_actions
-                        ai_status = f"Gemini summary generated using model '{ai_model}'."
-                    except Exception as ex:
-                        ai_summary = fallback_summary
-                        ai_status = f"Gemini unavailable ({ex}); showing deterministic summary/actions."
-                else:
-                    ai_summary = fallback_summary
-                    ai_status = "GEMINI_API_KEY is not configured; showing deterministic summary/actions."
-            elif ai_provider == "Groq":
-                if GROQ_API_KEY:
-                    try:
-                        with st.spinner(f"Generating selected node summary with Groq ({ai_model})..."):
-                            model_summary = _generate_groq_node_risk_summary(
-                                node_context=node_context,
-                                baseline_text=fallback_summary,
-                                model=ai_model,
-                            )
-                            model_actions = _generate_groq_next_actions(
-                                node_context=node_context,
-                                fallback_actions=ai_actions,
-                                model=ai_model,
-                            )
-                        ai_summary = model_summary if model_summary.strip() else fallback_summary
-                        ai_actions = model_actions if model_actions else ai_actions
-                        ai_status = f"Groq summary generated using model '{ai_model}'."
-                    except Exception as ex:
-                        ai_summary = fallback_summary
-                        ai_status = f"Groq unavailable ({ex}); showing deterministic summary/actions."
-                else:
-                    ai_summary = fallback_summary
-                    ai_status = "GROQ_API_KEY is not configured; showing deterministic summary/actions."
-            elif ai_provider == "Ollama (Local)":
-                node_rankings = outputs.get("node_rankings", pd.DataFrame())
-                rank_row = node_rankings[
-                    (node_rankings["network_id"].astype(str) == str(selected_network))
-                    & (node_rankings["customer_id"].astype(str) == str(selected_node))
-                ]
-                rank = rank_row.iloc[0] if not rank_row.empty else None
+        deterministic_summary, deterministic_actions, _ = build_ai_customer_brief(
+            analyzer=analyzer,
+            outputs=outputs,
+            selected_network=selected_network,
+            selected_node=str(selected_node),
+            node_df=node_df,
+            node_tx=node_tx,
+            fallback_summary=fallback_summary,
+            fallback_actions=ai_actions,
+        )
+        ai_summary = deterministic_summary
+        ai_actions = deterministic_actions
+        ai_status = (
+            "Deterministic summary shown by default. Click 'Generate AI Summary for Selected Node' to use the selected AI provider."
+            if use_ai_agent
+            else "AI agent disabled; showing deterministic summary/actions."
+        )
 
-                network_row_df = analyzer.network_summary[
-                    analyzer.network_summary["network_id"].astype(str) == str(selected_network)
-                ]
-                network_row = network_row_df.iloc[0] if not network_row_df.empty else None
+        current_node_key = f"{selected_network}|{selected_node}"
+        previous_node_key = st.session_state.get("_selected_node_ai_key")
+        if previous_node_key != current_node_key:
+            st.session_state["_selected_node_ai_key"] = current_node_key
+            st.session_state.pop("selected_node_ai_cached", None)
 
-                top_themes_df = analyzer.theme_log[
-                    analyzer.theme_log["network_id"].astype(str) == str(selected_network)
-                ].sort_values("severity_score", ascending=False).head(5)
-                theme_names = [str(r.subtheme) for r in top_themes_df.itertuples(index=False)]
-
-                txn_count = int(len(node_tx))
-                total_value = float(node_tx["amount_usd"].sum()) if txn_count else 0.0
-                avg_value = float(node_tx["amount_usd"].mean()) if txn_count else 0.0
-                outgoing_count = int((node_tx["originator_id"].astype(str) == str(selected_node)).sum()) if txn_count else 0
-                incoming_count = int((node_tx["beneficiary_id"].astype(str) == str(selected_node)).sum()) if txn_count else 0
-
-                sanctions = bool(rank["sanctions_flag"]) if rank is not None and "sanctions_flag" in rank else False
-                pep = bool(rank["pep_flag"]) if rank is not None and "pep_flag" in rank else False
-                sar = bool(rank["sar_flag"]) if rank is not None and "sar_flag" in rank else False
-                exited = bool(rank["exited_flag"]) if rank is not None and "exited_flag" in rank else False
-                node_score = float(rank.get("final_node_risk_score", 0.0) or 0.0) if rank is not None else 0.0
-                network_score = float(network_row.get("network_risk_score", 0.0) or 0.0) if network_row is not None else 0.0
-
-                pagerank_c = float(rank.get("pagerank_component", 0.0) or 0.0) if rank is not None else 0.0
-                flags_c = float(rank.get("flags_component", 0.0) or 0.0) if rank is not None else 0.0
-                prox_c = float(rank.get("proximity_component", 0.0) or 0.0) if rank is not None else 0.0
-                beh_c = float(rank.get("behaviour_component", 0.0) or 0.0) if rank is not None else 0.0
-
-                drivers = [
-                    ("pagerank influence", pagerank_c),
-                    ("direct risk flags", flags_c),
-                    ("proximity to flagged entities", prox_c),
-                    ("behavioural patterns", beh_c),
-                ]
-                drivers = sorted(drivers, key=lambda x: x[1], reverse=True)
-                top_driver_text = ", ".join([f"{k} ({v:.1f})" for k, v in drivers[:3]])
-
-                flag_text = []
-                if sanctions:
-                    flag_text.append("Sanctions")
-                if sar:
-                    flag_text.append("SAR")
-                if pep:
-                    flag_text.append("PEP")
-                if exited:
-                    flag_text.append("Exited")
-
-                if not HAS_OLLAMA:
-                    ai_summary = fallback_summary
-                    ai_status = "Ollama Python package not installed; showing deterministic summary/actions."
-                else:
-                    try:
-                        with st.spinner(f"Generating summary with Ollama ({ollama_model})..."):
-                            model_summary, model_actions = generate_ollama_customer_brief(
-                                model_name=ollama_model.strip() or "llama3.1:8b",
-                                selected_network=str(selected_network),
-                                selected_node=str(selected_node),
-                                node_score=node_score,
-                                network_score=network_score,
-                                txn_count=txn_count,
-                                total_value=total_value,
-                                avg_value=avg_value,
-                                outgoing_count=outgoing_count,
-                                incoming_count=incoming_count,
-                                top_driver_text=top_driver_text,
-                                flag_text=flag_text,
-                                theme_names=theme_names,
-                            )
-                        if model_summary.strip():
-                            ai_summary = model_summary
-                        else:
-                            ai_summary = fallback_summary
-                        if model_actions:
-                            ai_actions = model_actions
-                        ai_status = f"Ollama summary generated using model '{(ollama_model.strip() or 'llama3.1:8b')}'."
-                    except Exception as ex:
-                        ai_summary = fallback_summary
-                        ai_status = f"Ollama unavailable ({ex}); showing deterministic summary/actions."
-        else:
-            ai_summary, ai_actions, ai_status = build_ai_customer_brief(
-                analyzer=analyzer,
-                outputs=outputs,
-                selected_network=selected_network,
-                selected_node=str(selected_node),
-                node_df=node_df,
-                node_tx=node_tx,
-                fallback_summary=fallback_summary,
-                fallback_actions=ai_actions,
-            )
+        cached_node_ai = st.session_state.get("selected_node_ai_cached")
+        if isinstance(cached_node_ai, dict) and cached_node_ai.get("node_key") == current_node_key:
+            ai_summary = str(cached_node_ai.get("summary", ai_summary))
+            cached_actions = cached_node_ai.get("actions", ai_actions)
+            ai_actions = cached_actions if isinstance(cached_actions, list) else ai_actions
+            ai_status = str(cached_node_ai.get("status", ai_status))
 
         with st.container(border=True):
             card_title("🗂️", f"Case Snapshot — {selected_node}")
@@ -2856,6 +2962,123 @@ if "analyzer" in st.session_state:
 
         with st.container(border=True):
             card_title("🤖", "Selected Node AI Risk Summary")
+            generate_node_ai_clicked = False
+            if use_ai_agent:
+                generate_node_ai_clicked = st.button(
+                    "Generate AI Summary for Selected Node",
+                    key="selected_node_ai_generate_btn",
+                )
+
+            if generate_node_ai_clicked:
+                if ai_provider == "OpenAI":
+                    if OPENAI_API_KEY:
+                        try:
+                            with st.spinner(f"Generating selected node summary with OpenAI ({ai_model})..."):
+                                model_summary = _generate_openai_node_risk_summary(
+                                    node_context=node_context,
+                                    baseline_text=fallback_summary,
+                                    model=ai_model,
+                                )
+                                model_actions = _generate_openai_next_actions(
+                                    node_context=node_context,
+                                    fallback_actions=ai_actions,
+                                    model=ai_model,
+                                )
+                            ai_summary = model_summary if model_summary.strip() else fallback_summary
+                            ai_actions = model_actions if model_actions else ai_actions
+                            ai_status = f"OpenAI summary generated using model '{ai_model}'."
+                        except Exception as ex:
+                            ai_summary = fallback_summary
+                            ai_status = _openai_error_status(ex)
+                    else:
+                        ai_summary = fallback_summary
+                        ai_status = "OPENAI_API_KEY is not configured; showing deterministic summary/actions."
+                elif ai_provider == "Gemini":
+                    if GEMINI_API_KEY:
+                        try:
+                            with st.spinner(f"Generating selected node summary with Gemini ({ai_model})..."):
+                                model_summary = _generate_gemini_node_risk_summary(
+                                    node_context=node_context,
+                                    baseline_text=fallback_summary,
+                                    model=ai_model,
+                                )
+                                model_actions = _generate_gemini_next_actions(
+                                    node_context=node_context,
+                                    fallback_actions=ai_actions,
+                                    model=ai_model,
+                                )
+                            ai_summary = model_summary if model_summary.strip() else fallback_summary
+                            ai_actions = model_actions if model_actions else ai_actions
+                            ai_status = f"Gemini summary generated using model '{ai_model}'."
+                        except Exception as ex:
+                            ai_summary = fallback_summary
+                            ai_status = f"Gemini unavailable ({ex}); showing deterministic summary/actions."
+                    else:
+                        ai_summary = fallback_summary
+                        ai_status = "GEMINI_API_KEY is not configured; showing deterministic summary/actions."
+                elif ai_provider == "Groq":
+                    if GROQ_API_KEY:
+                        try:
+                            with st.spinner(f"Generating selected node summary with Groq ({ai_model})..."):
+                                model_summary = _generate_groq_node_risk_summary(
+                                    node_context=node_context,
+                                    baseline_text=fallback_summary,
+                                    model=ai_model,
+                                )
+                                model_actions = _generate_groq_next_actions(
+                                    node_context=node_context,
+                                    fallback_actions=ai_actions,
+                                    model=ai_model,
+                                )
+                            ai_summary = model_summary if model_summary.strip() else fallback_summary
+                            ai_actions = model_actions if model_actions else ai_actions
+                            ai_status = f"Groq summary generated using model '{ai_model}'."
+                        except Exception as ex:
+                            ai_summary = fallback_summary
+                            ai_status = f"Groq unavailable ({ex}); showing deterministic summary/actions."
+                    else:
+                        ai_summary = fallback_summary
+                        ai_status = "GROQ_API_KEY is not configured; showing deterministic summary/actions."
+                elif ai_provider == "Ollama (Local)":
+                    if not HAS_OLLAMA:
+                        ai_summary = fallback_summary
+                        ai_status = "Ollama Python package not installed; showing deterministic summary/actions."
+                    else:
+                        try:
+                            with st.spinner(f"Generating summary with Ollama ({ollama_model})..."):
+                                model_summary, model_actions = generate_ollama_customer_brief(
+                                    model_name=ollama_model.strip() or "llama3.1:8b",
+                                    selected_network=str(selected_network),
+                                    selected_node=str(selected_node),
+                                    node_score=node_score,
+                                    network_score=network_score,
+                                    txn_count=txn_count,
+                                    total_value=total_value,
+                                    avg_value=avg_value,
+                                    outgoing_count=outgoing_count,
+                                    incoming_count=incoming_count,
+                                    top_driver_text=top_driver_text,
+                                    flag_text=flag_text,
+                                    theme_names=theme_names,
+                                )
+                            ai_summary = model_summary if model_summary.strip() else fallback_summary
+                            ai_actions = model_actions if model_actions else ai_actions
+                            ai_status = f"Ollama summary generated using model '{(ollama_model.strip() or 'llama3.1:8b')}'."
+                        except Exception as ex:
+                            ai_summary = fallback_summary
+                            ai_status = f"Ollama unavailable ({ex}); showing deterministic summary/actions."
+                else:
+                    ai_summary = deterministic_summary
+                    ai_actions = deterministic_actions
+                    ai_status = "Deterministic provider selected; showing deterministic summary/actions."
+
+                st.session_state["selected_node_ai_cached"] = {
+                    "node_key": current_node_key,
+                    "summary": ai_summary,
+                    "actions": ai_actions,
+                    "status": ai_status,
+                }
+
             st.markdown(f'<div class="genai-card">{ai_summary.replace(chr(10), "<br>")}</div>', unsafe_allow_html=True)
             if ai_status:
                 st.caption(ai_status)
