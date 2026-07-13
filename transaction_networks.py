@@ -110,6 +110,14 @@ class FinancialCrimeNetworkAnalyzer:
         self.network_node_details: Dict[str, pd.DataFrame] = {}
         self.network_graph_edges: Dict[str, pd.DataFrame] = {}
 
+        self.full_network_id = "Network-Full"
+        self.full_network_nodes: Set[str] = set()
+        self.full_network_edge_agg = pd.DataFrame()
+        self.full_network_txn = pd.DataFrame()
+        self.full_network_node_details = pd.DataFrame()
+        self.full_network_graph_edges = pd.DataFrame()
+        self.full_network_cluster_map: Dict[str, int] = {}
+
         self.window_label = ""
 
     def run(self) -> Dict[str, pd.DataFrame]:
@@ -170,18 +178,8 @@ class FinancialCrimeNetworkAnalyzer:
         ]:
             df[c] = _to_bool(df[c])
 
-        df["originator_exit_date"] = pd.to_datetime(
-            df["originator_exit_date"],
-            format="%d/%m/%y",
-            errors="coerce",
-            utc=True,
-        ).dt.tz_localize(None)
-        df["beneficiary_exit_date"] = pd.to_datetime(
-            df["beneficiary_exit_date"],
-            format="%d/%m/%y",
-            errors="coerce",
-            utc=True,
-        ).dt.tz_localize(None)
+        df["originator_exit_date"] = pd.to_datetime(df["originator_exit_date"], errors="coerce", utc=True).dt.tz_localize(None)
+        df["beneficiary_exit_date"] = pd.to_datetime(df["beneficiary_exit_date"], errors="coerce", utc=True).dt.tz_localize(None)
 
         max_dt = df["transaction_datetime"].max()
         if self.config.use_all_dates:
@@ -296,6 +294,13 @@ class FinancialCrimeNetworkAnalyzer:
             self.edge_agg["source"].astype(str).isin(visited) & self.edge_agg["target"].astype(str).isin(visited)
         ].copy()
 
+        self.full_network_nodes = set([str(x) for x in visited])
+        self.full_network_edge_agg = edge_sub.copy()
+        self.full_network_txn = self.df[
+            self.df["originator_id"].astype(str).isin(self.full_network_nodes)
+            & self.df["beneficiary_id"].astype(str).isin(self.full_network_nodes)
+        ].copy()
+
         ug = nx.Graph()
         for node in visited:
             ug.add_node(node)
@@ -305,6 +310,36 @@ class FinancialCrimeNetworkAnalyzer:
         components = sorted(nx.connected_components(ug), key=lambda c: (-len(c), sorted(list(c))[0]))
         if not components:
             components = [set([start])]
+
+        expanded_components: List[Set[str]] = []
+        for comp in components:
+            comp_nodes = set([str(x) for x in comp])
+
+            # If the target is the articulation that bridges otherwise disconnected groups,
+            # treat each disconnected group as its own network and include the target in each.
+            if start in comp_nodes and len(comp_nodes) > 1:
+                sub = ug.subgraph(comp_nodes).copy()
+                sub.remove_node(start)
+                residual = list(nx.connected_components(sub))
+                if residual:
+                    for rc in residual:
+                        rc_nodes = set([str(x) for x in rc])
+                        expanded_components.append(rc_nodes.union({start}))
+                else:
+                    expanded_components.append({start})
+            else:
+                expanded_components.append(comp_nodes)
+
+        # Deduplicate components in case graph operations produce repeated node sets.
+        unique_components = []
+        seen = set()
+        for comp in expanded_components:
+            key = tuple(sorted(comp))
+            if key not in seen:
+                seen.add(key)
+                unique_components.append(comp)
+
+        components = sorted(unique_components, key=lambda c: (-len(c), sorted(list(c))[0]))
 
         self.network_nodes = {}
         self.network_edge_agg = {}
@@ -320,6 +355,13 @@ class FinancialCrimeNetworkAnalyzer:
             self.network_txn[nid] = self.df[
                 self.df["originator_id"].astype(str).isin(nodes) & self.df["beneficiary_id"].astype(str).isin(nodes)
             ].copy()
+
+        self.full_network_cluster_map = {}
+        for i, comp in enumerate(components, start=1):
+            for node_id in comp:
+                if str(node_id) != str(start):
+                    self.full_network_cluster_map[str(node_id)] = int(i)
+        self.full_network_cluster_map[str(start)] = 0
 
     def _build_digraph(self, network_id: str) -> nx.DiGraph:
         edge_df = self.network_edge_agg[network_id]
@@ -472,8 +514,7 @@ class FinancialCrimeNetworkAnalyzer:
                 }
             )
 
-        # Network Theme A: High Connectivity / Hub
-        # Identify high-degree and high-centrality nodes that act as transaction hubs or bridges.
+        # Network Theme A: high connectivity and bridge behaviour
         deg = dict(gu.degree())
         weighted_deg = {
             n: sum([float(g[u][v].get("total_amount_usd", 0.0)) for u, v in g.in_edges(n)])
@@ -497,8 +538,7 @@ class FinancialCrimeNetworkAnalyzer:
                 self._example_txn_ids(txn, hub_tx_mask),
             )
 
-        # Network Theme B: Closed Loop / Circular Flow
-        # Detect transaction cycles and return flows consistent with layering or circular movement.
+        # Network Theme B: circular flow
         cycles = self._cycles_len_2_6(g)
         circular_return_count = 0
         if not txn.empty:
@@ -527,8 +567,7 @@ class FinancialCrimeNetworkAnalyzer:
             self._example_txn_ids(txn, cyc_tx_mask),
         )
 
-        # Network Theme D: High-Risk Proximity
-        # Measure how many nodes lie within short network distance of flagged risk entities.
+        # Network Theme D: high-risk proximity
         risk_seed = set().union(flagged["sanctions"], flagged["pep"], flagged["sar"], flagged["exited"])
         dist = self._shortest_paths_to_flagged(gu, risk_seed)
         within_2 = [n for n, d in dist.items() if d <= 2]
@@ -668,8 +707,7 @@ class FinancialCrimeNetworkAnalyzer:
         pep_evidence = f"pep_nodes={len(pep_nodes)}; nodes={','.join(pep_nodes[:10])}"
         add_theme("PEP Themes", "PEP Customer (flag-based)", pep_sev, pep_evidence, self._example_txn_ids(txn, pep_mask))
 
-        # PEP Theme B: PEP Proximity
-        # Identify nodes within 1-2 hops of known PEP customers to capture proximity risk.
+        # PEP Theme B
         pep_dist = self._shortest_paths_to_flagged(gu, set(pep_nodes))
         pep_near = [n for n, d in pep_dist.items() if d <= 2]
         pep_prox_sev = min(100.0, (len(pep_near) / max(1, node_count)) * 100)
@@ -708,8 +746,7 @@ class FinancialCrimeNetworkAnalyzer:
             self._example_txn_ids(txn, txn["originator_id"].isin(exited_exposed) | txn["beneficiary_id"].isin(exited_exposed)),
         )
 
-        # KYC Proxy Theme: High-Risk Geography / Cross-border Complexity
-        # Track cross-border transaction corridors and geographic complexity in the network.
+        # KYC proxy B
         corridor = (
             txn.assign(corridor=txn["originator_country"].astype(str) + "->" + txn["beneficiary_country"].astype(str))["corridor"]
             .value_counts()
@@ -967,16 +1004,96 @@ class FinancialCrimeNetworkAnalyzer:
         self.node_risk_table = self.node_risk_table.sort_values(["network_id", "final_node_risk_score"], ascending=[True, False]).reset_index(drop=True)
         self.top5_explanations = pd.concat(top5_parts, ignore_index=True) if top5_parts else pd.DataFrame()
 
+        full_profiles = self._node_info(self.full_network_nodes)
+        if not full_profiles.empty:
+            base_cols = [
+                "customer_id",
+                "customer_name",
+                "country",
+                "entity_type",
+                "sanctions_flag",
+                "pep_flag",
+                "sar_flag",
+                "exited_flag",
+                "dra_score",
+            ]
+            base = full_profiles.copy()
+            for c in base_cols:
+                if c not in base.columns:
+                    base[c] = 0.0 if c == "dra_score" else False if c.endswith("_flag") else ""
+            base = base[base_cols].copy()
+
+            if self.node_risk_table.empty:
+                self.full_network_node_details = base.copy()
+                self.full_network_node_details["final_node_risk_score"] = 0.0
+            else:
+                ranked_cols = [
+                    "customer_id",
+                    "final_node_risk_score",
+                    "sanctions_flag",
+                    "pep_flag",
+                    "sar_flag",
+                    "exited_flag",
+                ]
+                ranked_available = [c for c in ranked_cols if c in self.node_risk_table.columns]
+                ranked = self.node_risk_table[ranked_available].copy()
+                if "final_node_risk_score" in ranked.columns:
+                    ranked = ranked.sort_values("final_node_risk_score", ascending=False)
+                ranked = ranked.drop_duplicates(subset=["customer_id"], keep="first")
+
+                self.full_network_node_details = base.merge(
+                    ranked,
+                    on="customer_id",
+                    how="left",
+                    suffixes=("", "_rank"),
+                )
+
+                for c in ["sanctions_flag", "pep_flag", "sar_flag", "exited_flag"]:
+                    rank_col = f"{c}_rank"
+                    if rank_col in self.full_network_node_details.columns:
+                        self.full_network_node_details[c] = self.full_network_node_details[rank_col].where(
+                            self.full_network_node_details[rank_col].notna(),
+                            self.full_network_node_details[c],
+                        )
+                        self.full_network_node_details = self.full_network_node_details.drop(columns=[rank_col])
+
+                if "final_node_risk_score" not in self.full_network_node_details.columns:
+                    self.full_network_node_details["final_node_risk_score"] = 0.0
+
+            self.full_network_node_details["customer_name"] = self.full_network_node_details["customer_name"].fillna("")
+            self.full_network_node_details["country"] = self.full_network_node_details["country"].fillna("")
+            self.full_network_node_details["entity_type"] = self.full_network_node_details["entity_type"].fillna("")
+            for c in ["final_node_risk_score", "dra_score"]:
+                self.full_network_node_details[c] = pd.to_numeric(
+                    self.full_network_node_details[c], errors="coerce"
+                ).fillna(0.0)
+            for c in ["sanctions_flag", "pep_flag", "sar_flag", "exited_flag"]:
+                self.full_network_node_details[c] = self.full_network_node_details[c].fillna(False).astype(bool)
+        else:
+            self.full_network_node_details = pd.DataFrame()
+
+        if self.full_network_edge_agg.empty:
+            self.full_network_graph_edges = pd.DataFrame()
+        else:
+            self.full_network_graph_edges = self.full_network_edge_agg.rename(
+                columns={"source": "originator_id", "target": "beneficiary_id"}
+            ).copy()
+
     def get_network_ids(self) -> List[str]:
         if self.network_summary.empty:
             return []
         return self.network_summary["network_id"].tolist()
 
     def get_network_graph_data(self, network_id: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        if str(network_id) == str(self.full_network_id):
+            return self.full_network_node_details.copy(), self.full_network_graph_edges.copy()
         return self.network_node_details.get(network_id, pd.DataFrame()), self.network_graph_edges.get(network_id, pd.DataFrame())
 
     def get_node_transactions(self, network_id: str, customer_id: str) -> pd.DataFrame:
-        t = self.network_txn.get(network_id, pd.DataFrame()).copy()
+        if str(network_id) == str(self.full_network_id):
+            t = self.full_network_txn.copy()
+        else:
+            t = self.network_txn.get(network_id, pd.DataFrame()).copy()
         if t.empty:
             return t
         cid = str(customer_id)
@@ -996,6 +1113,9 @@ class FinancialCrimeNetworkAnalyzer:
             "scenario_tag",
         ]
         return t[cols].sort_values("transaction_datetime", ascending=False).reset_index(drop=True)
+
+    def get_full_network_clusters(self) -> Dict[str, int]:
+        return dict(self.full_network_cluster_map)
 
     def get_customer_kyc(self, customer_id: str) -> dict:
         cid = str(customer_id).strip()
