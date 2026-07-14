@@ -282,6 +282,36 @@ st.markdown("""
     filter: brightness(1.1);
     transform: translateY(-1px);
 }
+/* ===========================
+   Metric Values (FIX)
+   =========================== */
+
+[data-testid="stMetricValue"] {
+    color: #FFFFFF !important;
+    opacity: 1 !important;
+    font-weight: 700 !important;
+}
+
+[data-testid="stMetricValue"] > div {
+    color: #FFFFFF !important;
+    opacity: 1 !important;
+}
+
+[data-testid="stMetricValue"] * {
+    color: #FFFFFF !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}
+
+[data-testid="stMetricLabel"] {
+    color: #CFE5FF !important;
+    font-weight: 600 !important;
+}
+
+[data-testid="stMetricDelta"] {
+    color: #FFFFFF !important;
+    opacity: 1 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
