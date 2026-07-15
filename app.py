@@ -62,7 +62,7 @@ st.secrets.get("GROQ_API_KEY")
 or os.getenv("GROQ_API_KEY")
 )
 if OPENAI_API_KEY:
-openai.api_key = OPENAI_API_KEY
+    openai.api_key = OPENAI_API_KEY
 
 st.set_page_config(page_title="Atlas Detection Lab", layout="wide", page_icon="🔍")
 
