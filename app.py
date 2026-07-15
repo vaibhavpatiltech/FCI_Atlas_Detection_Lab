@@ -42,27 +42,27 @@ from transaction_networks import AnalyzerConfig, FinancialCrimeNetworkAnalyzer, 
 
 from dotenv import load_dotenv
 
-load_dotenv()      # Works locally
+load_dotenv() # Works locally
 
 OPENAI_API_KEY = (
-    st.secrets.get("OPENAI_API_KEY")
-    or os.getenv("OPENAI_API_KEY")
-    or os.getenv("openai_api_key")
+st.secrets.get("OPENAI_API_KEY")
+or os.getenv("OPENAI_API_KEY")
+or os.getenv("openai_api_key")
 )
 
 GEMINI_API_KEY = (
-    st.secrets.get("GEMINI_API_KEY")
-    or st.secrets.get("GOOGLE_API_KEY")
-    or os.getenv("GEMINI_API_KEY")
-    or os.getenv("GOOGLE_API_KEY")
+st.secrets.get("GEMINI_API_KEY")
+or st.secrets.get("GOOGLE_API_KEY")
+or os.getenv("GEMINI_API_KEY")
+or os.getenv("GOOGLE_API_KEY")
 )
 
 GROQ_API_KEY = (
-    st.secrets.get("GROQ_API_KEY")
-    or os.getenv("GROQ_API_KEY")
+st.secrets.get("GROQ_API_KEY")
+or os.getenv("GROQ_API_KEY")
 )
 if OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
+openai.api_key = OPENAI_API_KEY
 
 st.set_page_config(page_title="Atlas Detection Lab", layout="wide", page_icon="🔍")
 
@@ -283,34 +283,34 @@ st.markdown("""
     transform: translateY(-1px);
 }
 /* ===========================
-   Metric Values (FIX)
-   =========================== */
+Metric Values (FIX)
+=========================== */
 
 [data-testid="stMetricValue"] {
-    color: #FFFFFF !important;
-    opacity: 1 !important;
-    font-weight: 700 !important;
+color: #FFFFFF !important;
+opacity: 1 !important;
+font-weight: 700 !important;
 }
 
 [data-testid="stMetricValue"] > div {
-    color: #FFFFFF !important;
-    opacity: 1 !important;
+color: #FFFFFF !important;
+opacity: 1 !important;
 }
 
 [data-testid="stMetricValue"] * {
-    color: #FFFFFF !important;
-    opacity: 1 !important;
-    -webkit-text-fill-color: #FFFFFF !important;
+color: #FFFFFF !important;
+opacity: 1 !important;
+-webkit-text-fill-color: #FFFFFF !important;
 }
 
 [data-testid="stMetricLabel"] {
-    color: #CFE5FF !important;
-    font-weight: 600 !important;
+color: #CFE5FF !important;
+font-weight: 600 !important;
 }
 
 [data-testid="stMetricDelta"] {
-    color: #FFFFFF !important;
-    opacity: 1 !important;
+color: #FFFFFF !important;
+opacity: 1 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -1293,6 +1293,43 @@ def load_data() -> pd.DataFrame:
 
 def parse_mode(mode: str) -> str:
     return "value" if mode == "value-weighted" else "count"
+
+
+def estimate_unique_nodes_within_hops(
+    df: pd.DataFrame,
+    target_customer_id: str,
+    use_all_dates: bool,
+    lookback_days: int,
+    n_hops: int,
+) -> int:
+    if df is None or df.empty:
+        return 0
+
+    working_df = df
+    if not bool(use_all_dates) and "transaction_datetime" in df.columns:
+        dt_series = pd.to_datetime(df["transaction_datetime"], errors="coerce", utc=True).dt.tz_localize(None)
+        valid_mask = dt_series.notna()
+        if valid_mask.any():
+            max_dt = dt_series[valid_mask].max()
+            cutoff_dt = max_dt - pd.Timedelta(days=int(lookback_days))
+            working_df = df.loc[valid_mask & (dt_series >= cutoff_dt)].copy()
+        else:
+            working_df = df.iloc[0:0].copy()
+
+    if working_df.empty:
+        return 0
+
+    graph = nx.Graph()
+    origins = working_df["originator_id"].astype(str)
+    beneficiaries = working_df["beneficiary_id"].astype(str)
+    graph.add_edges_from(zip(origins, beneficiaries))
+
+    target_id = str(target_customer_id)
+    if target_id not in graph:
+        return 0
+
+    reachable_nodes = nx.single_source_shortest_path_length(graph, target_id, cutoff=int(n_hops))
+    return int(len(reachable_nodes))
 
 
 def generate_ollama_customer_brief(
@@ -2290,25 +2327,77 @@ def render_case_snapshot(
 
     with right_col:
         with st.container(border=True):
-            card_title("📊", "Risk Score Breakdown (For Demo purposes only, not for FCI)")
-            if cid == target_cid and str(selected_network) == str(full_network_id):
-                st.caption(f"Using top network {effective_network} for target customer while Full Network is selected.")
-            elif str(effective_network) != str(selected_network):
-                st.caption(f"Using node's split network {effective_network} while Full Network focus is selected.")
-            sc1, sc2 = st.columns(2)
-            sc1.metric("Composite Score", f"{risk_score:.1f}", help=f"Overall node risk score with current logic (effective max {NODE_SCORE_MAX:.1f})")
-            sc2.metric("Risk Band", risk_band)
-            sc3, sc4, sc5, sc6 = st.columns(4)
-            sc3.metric("PageRank", f"{pagerank_c:.1f}", help="40% weight – network influence")
-            sc4.metric("Flags", f"{flags_c:.1f}", help="30% weight – direct risk flags")
-            sc5.metric("Proximity", f"{prox_c:.1f}", help="20% weight – distance to flagged nodes")
-            sc6.metric("Behaviour", f"{beh_c:.1f}", help="10% weight – transactional patterns")
-            st.caption(
-                "Composite Score = PageRank (40%) + Flags (30%) + Proximity (20%) + Behaviour (10%). "
-                f"Values shown above are weighted contributions, and their sum gives the node score (effective max {NODE_SCORE_MAX:.1f})."
+            card_title("🔎", "Connected Parties With High DRA Score")
+            dra_threshold = st.number_input(
+                "Simulate with DRA Score",
+                min_value=0.0,
+                max_value=5000.0,
+                value=750.0,
+                step=10.0,
+                key=f"connected_party_dra_threshold_{target_cid}",
+                help="Shows connected parties for the targeted customer across all discovered networks where DRA score is above this value.",
             )
-            if key_reasons:
-                st.markdown(f"**Key reasons:** {key_reasons.replace('|', ' · ')}")
+
+            connected_nodes_df = pd.DataFrame()
+            full_details = getattr(analyzer, "full_network_node_details", pd.DataFrame())
+            if isinstance(full_details, pd.DataFrame) and not full_details.empty:
+                connected_nodes_df = full_details.copy()
+            else:
+                profiles = getattr(analyzer, "node_profiles", pd.DataFrame())
+                full_nodes = set([str(x) for x in getattr(analyzer, "full_network_nodes", set())])
+                if isinstance(profiles, pd.DataFrame) and not profiles.empty and full_nodes:
+                    connected_nodes_df = profiles[
+                        profiles["customer_id"].astype(str).isin(full_nodes)
+                    ][["customer_id", "customer_name", "dra_score"]].copy()
+
+            if connected_nodes_df.empty:
+                st.info("No connected-party data available for the targeted customer in the discovered networks.")
+            else:
+                connected_nodes_df["customer_id"] = connected_nodes_df["customer_id"].astype(str)
+                connected_nodes_df["customer_name"] = connected_nodes_df["customer_name"].fillna("").astype(str)
+                connected_nodes_df["dra_score"] = pd.to_numeric(connected_nodes_df["dra_score"], errors="coerce").fillna(0.0)
+
+                network_id_map = {}
+                if isinstance(node_rankings, pd.DataFrame) and not node_rankings.empty:
+                    rank_lookup = node_rankings[["customer_id", "network_id"]].copy()
+                    rank_lookup["customer_id"] = rank_lookup["customer_id"].astype(str)
+                    rank_lookup["network_id"] = rank_lookup["network_id"].astype(str)
+                    network_id_map = (
+                        rank_lookup
+                        .drop_duplicates(subset=["customer_id"], keep="first")
+                        .set_index("customer_id")["network_id"]
+                        .to_dict()
+                    )
+                connected_nodes_df["network_id"] = connected_nodes_df["customer_id"].map(network_id_map).fillna("Unknown")
+
+                high_dra_parties = connected_nodes_df[
+                    (connected_nodes_df["customer_id"] != target_cid)
+                    & (connected_nodes_df["dra_score"] > float(dra_threshold))
+                ][["customer_id", "customer_name", "dra_score", "network_id"]].drop_duplicates(subset=["customer_id"]).copy()
+
+                high_dra_parties = high_dra_parties.sort_values("dra_score", ascending=False).reset_index(drop=True)
+
+                st.caption(
+                    f"Targeted customer: {target_cid}. Search scope: all discovered networks connected to the target. "
+                    f"Threshold: DRA > {float(dra_threshold):.1f}."
+                )
+
+                if high_dra_parties.empty:
+                    st.success("No connected parties found above the configured DRA threshold.")
+                else:
+                    st.dataframe(
+                        high_dra_parties.rename(
+                            columns={
+                                "network_id": "Network ID",
+                                "customer_id": "Customer ID",
+                                "customer_name": "Customer Name",
+                                "dra_score": "DRA Score",
+                            }
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    st.caption(f"Found {len(high_dra_parties)} connected parties above threshold.")
 
     with st.container(border=True):
         node_tx_display = node_tx.copy()
@@ -2819,7 +2908,7 @@ with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     use_all_dates = st.checkbox("Use all dates", value=False)
     lookback_days = st.number_input("Lookback days (default 180)", min_value=30, max_value=3650, value=180, step=30)
-    n_hops = st.number_input("N hops (default 2)", min_value=1, max_value=6, value=2, step=1)
+    n_hops = st.number_input("Number of Counterparty Rings", min_value=1, max_value=6, value=2, step=1)
     ranking_mode = "value-weighted"
     use_ai_agent = st.checkbox("Use AI Summary Generator", value=True)
     ai_provider = st.selectbox(
@@ -2913,6 +3002,62 @@ if input_df is not None:
     )
 
     run = st.button("Run analysis", type="primary")
+
+    if run and int(n_hops) > 2:
+        unique_node_count = estimate_unique_nodes_within_hops(
+            df=input_df,
+            target_customer_id=str(target_customer_id),
+            use_all_dates=bool(use_all_dates),
+            lookback_days=int(lookback_days),
+            n_hops=int(n_hops),
+        )
+        st.session_state["pending_high_hop_analysis"] = {
+            "target_customer_id": str(target_customer_id),
+            "use_all_dates": bool(use_all_dates),
+            "lookback_days": int(lookback_days),
+            "n_hops": int(n_hops),
+            "unique_node_count": int(unique_node_count),
+        }
+        run = False
+
+    pending_high_hop = st.session_state.get("pending_high_hop_analysis")
+    if st.session_state.pop("high_hop_cancel_notice", False):
+        st.info("Analysis cancelled.")
+
+    if pending_high_hop:
+        pending_hops = int(pending_high_hop["n_hops"])
+        pending_nodes = int(pending_high_hop["unique_node_count"])
+        if pending_nodes > 50:
+            high_hop_message = (
+                f"Selected  n_hops={pending_hops} resulting total unique nodes={pending_nodes}, "
+                "it will be time and rescource consuming, do you want to proceed ?"
+            )
+        else:
+            high_hop_message = (
+                f"Selected  n_hops={pending_hops} resulting total unique nodes={pending_nodes},  "
+                "though the total unique nodes count is less than 50, but still it can be time and rescource consuming, do you want to proceed ?"
+            )
+        st.warning(
+            high_hop_message
+        )
+        confirm_col, cancel_col = st.columns(2)
+        with confirm_col:
+            proceed_high_hop = st.button("Yes, proceed", key="confirm_high_hop_run")
+        with cancel_col:
+            cancel_high_hop = st.button("No, cancel", key="cancel_high_hop_run")
+
+        if proceed_high_hop:
+            run = True
+            target_customer_id = str(pending_high_hop["target_customer_id"])
+            use_all_dates = bool(pending_high_hop["use_all_dates"])
+            lookback_days = int(pending_high_hop["lookback_days"])
+            n_hops = int(pending_high_hop["n_hops"])
+            st.session_state.pop("pending_high_hop_analysis", None)
+        elif cancel_high_hop:
+            st.session_state.pop("pending_high_hop_analysis", None)
+            st.session_state["high_hop_cancel_notice"] = True
+            st.rerun()
+
     if run:
         cfg = AnalyzerConfig(
             use_all_dates=bool(use_all_dates),
